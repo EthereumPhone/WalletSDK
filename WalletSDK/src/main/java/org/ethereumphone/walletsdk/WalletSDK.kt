@@ -40,7 +40,7 @@ class WalletSDK(
             var result =  "notfulfilled"
 
             thread {
-                // result = hasBeenFulfilled!!.invoke(proxy) as String
+                result = hasBeenFulfilled!!.invoke(proxy) as String
                 if(result != "notfulfilled") {
                     Thread.interrupted()
                 }
@@ -57,7 +57,7 @@ class WalletSDK(
             var result =  "notfulfilled"
 
             thread {
-                // result = hasBeenFulfilled!!.invoke(proxy) as String
+                result = hasBeenFulfilled!!.invoke(proxy) as String
                 if(result != "notfulfilled") {
                     Thread.interrupted()
                 }
