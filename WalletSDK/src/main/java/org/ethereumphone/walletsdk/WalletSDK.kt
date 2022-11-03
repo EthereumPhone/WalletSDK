@@ -87,8 +87,8 @@ class WalletSDK(
                         }
                     }
                 }
-                // completableFuture.complete(web3j!!.ethSendRawTransaction(result).sendAsync().get().transactionHash)
-                completableFuture.complete(result)
+                completableFuture.complete(web3j!!.ethSendRawTransaction(result).sendAsync().get().transactionHash)
+                //completableFuture.complete(result)
             }
             return completableFuture
         } else {

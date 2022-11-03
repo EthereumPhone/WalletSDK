@@ -5,7 +5,6 @@ import androidx.activity.compose.setContent
 import androidx.appcompat.app.AppCompatActivity
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.platform.LocalContext
-import org.ethereumphone.walletsdk.WalletSDK
 
 
 class MainActivity : AppCompatActivity() {
@@ -17,22 +16,22 @@ class MainActivity : AppCompatActivity() {
 
 @Composable
 fun TestActivity() {
-    var con = LocalContext.current
-    var test = WalletSDK(con)
+    val context = LocalContext.current
+    val wallet = WalletSDK(context)
 
 
-    // Sign Message
-    test.signMessage(
+    // How to sign Message
+    wallet.signMessage(
         message = "Launch control this is Houston, we are go for launch."
     ).whenComplete { s, throwable ->
         // Returns signed message
         println(s)
     }
 
-    // Send Transactions
-    test.sendTransaction(
-        to = "0x3a4e6ed8b0f02bfbfaa3c6506af2db939ea5798c",
-        value = "1000000000000000000",
+    // How to send send Transactions
+    wallet.sendTransaction(
+        to = "0x3a4e6ed8b0f02bfbfaa3c6506af2db939ea5798c", // mhaas.eth
+        value = "1000000000000000000", // One eth in wei
         data = ""
     ).whenComplete {s, throwable ->
         // Returns tx-id
