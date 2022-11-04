@@ -17,7 +17,11 @@ wallet.signMessage(
     message = "Message to sign"
 ).whenComplete { s, throwable ->
     // Returns signed message
-    println(s)
+    if (s == WalletSDK.DECLINE) {
+        println("Sign message has been declined")
+    } else {
+        println(s)
+    }
 }
 ```
 
@@ -31,6 +35,10 @@ test.sendTransaction(
     data = ""
 ).whenComplete {s, throwable ->
     // Returns tx-id
-    println(s)
+    if (s == WalletSDK.DECLINE) {
+        println("Send transaction has been declined")
+    } else {
+        println(s)
+    }
 }
 ```
