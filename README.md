@@ -2,14 +2,43 @@
 
 This is an SDK to use the system-level wallet on ethOS.
 
-### Initialize SDK
+### How to add the WalletSDK into your app
+
+First, go into your `settings.gradle` file and add the line `maven { url 'https://jitpack.io' }` to the `pluginManagement` and the `dependencyResolutionManagement` section like this:
+
+```groovy
+pluginManagement {
+    repositories {
+        gradlePluginPortal()
+        google()
+        mavenCentral()
+        maven { url 'https://jitpack.io' }
+    }
+}
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {
+        google()
+        mavenCentral()
+        maven { url 'https://jitpack.io' }
+    }
+}
+```
+
+Then go to your module-level `build.gradle` file and add the following line to the `dependencies` section:
+
+```groovy
+implementation 'com.github.EthereumPhone:WalletSDK:0.0.3'
+```
+
+### How to initialize SDK
 
 ```kotlin
 // You just need to supply a context
 val wallet = WalletSDK(context)
 ```
 
-### Sign message
+### How to sign a message
 
 ```kotlin
 // How to sign Message
@@ -25,7 +54,7 @@ wallet.signMessage(
 }
 ```
 
-### Send Transaction
+### How to send a Transaction
 
 ```kotlin
 // How to send send Transactions
