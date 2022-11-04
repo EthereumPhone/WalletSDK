@@ -1,28 +1,32 @@
 package org.ethereumphone.walletsdk
 
+import android.annotation.SuppressLint
 import android.content.Context
 import dev.pinkroom.walletconnectkit.WalletConnectKit
-import dev.pinkroom.walletconnectkit.WalletConnectKitConfig
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.GlobalScope
-import kotlinx.coroutines.launch
-import org.ethereumphone.walletsdk.model.Config
-import org.walletconnect.Session
+import org.ethereumphone.walletsdk.model.NoSysWalletException
 import org.web3j.protocol.Web3j
 import org.web3j.protocol.core.DefaultBlockParameterName
 import org.web3j.protocol.http.HttpService
 import java.util.concurrent.CompletableFuture
-import kotlin.concurrent.thread
 
 
-const val SYS_SERVICE = "android.os.WalletProxy"
+
+
 
 class WalletSDK(
     context: Context,
-    configWallet: Config? = null,
     web3RPC: String = "https://cloudflare-eth.com"
 )  {
-    private val cls: Class<*> = Class.forName(SYS_SERVICE)
+
+    companion object {
+        const val SYS_SERVICE_CLASS = "android.os.WalletProxy"
+        const val SYS_SERVICE = "wallet"
+        const val DECLINE = "decline"
+        const val NOTFULFILLED = "notfulfilled"
+    }
+
+
+    private val cls: Class<*> = Class.forName(SYS_SERVICE_CLASS)
     private val createSession = cls.declaredMethods[1]
     private val getUserDecision = cls.declaredMethods[3]
     private val hasBeenFulfilled = cls.declaredMethods[4]
@@ -30,26 +34,19 @@ class WalletSDK(
     private val signMessageSys = cls.declaredMethods[6]
     private val getAddress = cls.declaredMethods[2]
     private var address: String? = null
-    private var onConnected: ((address: String) -> Unit)? = null
-    private val proxy = context.getSystemService("wallet")
-    private val config = configWallet?.walletConnectKitConfig ?: WalletConnectKitConfig(
-        context = context,
-        bridgeUrl = "wss://bridge.aktionariat.com:8887",
-        appUrl = "https://ethereumphone.org",
-        appName = "WalletSDK",
-        appDescription = ""
-    )
+    @SuppressLint("WrongConstant")
+    private val proxy = context.getSystemService(SYS_SERVICE)
     private var web3j: Web3j? = null
     private var walletConnectKit: WalletConnectKit? = null
     private var sysSession: String? = null
 
     init {
         if (proxy == null) {
-            walletConnectKit = WalletConnectKit.Builder(config).build()
+            throw NoSysWalletException("No system wallet found")
         } else {
             sysSession = createSession.invoke(proxy) as String
             val reqID = getAddress.invoke(proxy, sysSession) as String
-            Thread.sleep(200)
+            Thread.sleep(100)
             address = hasBeenFulfilled.invoke(proxy, reqID) as String
         }
         web3j = Web3j.build(HttpService(web3RPC))
@@ -76,34 +73,27 @@ class WalletSDK(
 
                 val reqID = sendTransaction.invoke(proxy, sysSession, to, value, data, ethGetTransactionCount.transactionCount.toString(), gasPrice, gasAmount)
 
-                var result = "notfulfilled"
+                var result = NOTFULFILLED
 
                 while (true) {
                     val tempResult =  hasBeenFulfilled!!.invoke(proxy, reqID)
                     if (tempResult != null) {
                         result = tempResult as String
-                        if(result != "notfulfilled") {
+                        if(result != NOTFULFILLED) {
                             break
                         }
                     }
+                    Thread.sleep(100)
                 }
-                completableFuture.complete(web3j!!.ethSendRawTransaction(result).sendAsync().get().transactionHash)
-                //completableFuture.complete(result)
+                if (result == DECLINE) {
+                    completableFuture.complete(DECLINE)
+                } else {
+                    completableFuture.complete(web3j!!.ethSendRawTransaction(result).sendAsync().get().transactionHash)
+                }
             }
             return completableFuture
         } else {
-            val completableFuture = CompletableFuture<String>()
-
-            CompletableFuture.runAsync {
-                GlobalScope.launch(Dispatchers.Main) {
-                    completableFuture.complete(walletConnectKit!!.performTransaction(
-                        address = to,
-                        value = value,
-                        data = data).result.toString())
-                }
-
-            }
-            return completableFuture
+            throw NoSysWalletException("No system wallet found")
         }
     }
 
@@ -113,32 +103,24 @@ class WalletSDK(
             CompletableFuture.runAsync {
                 val reqID = signMessageSys.invoke(proxy, sysSession, message) as String
 
-                var result =  "notfulfilled"
+                var result =  NOTFULFILLED
 
                 while (true) {
                     val tempResult =  hasBeenFulfilled!!.invoke(proxy, reqID)
                     if (tempResult != null) {
                         result = tempResult as String
-                        if(result != "notfulfilled") {
+                        if(result != NOTFULFILLED) {
                             break
                         }
                     }
-                    Thread.sleep(50)
+                    Thread.sleep(100)
                 }
                 completableFuture.complete(result)
             }
 
             return completableFuture
         } else {
-            val completableFuture = CompletableFuture<String>()
-
-            CompletableFuture.runAsync {
-                GlobalScope.launch(Dispatchers.Main) {
-                    completableFuture.complete(walletConnectKit!!.personalSign(message).result.toString())
-                }
-
-            }
-            return completableFuture
+            throw NoSysWalletException("No system wallet found")
         }
     }
 
@@ -146,50 +128,21 @@ class WalletSDK(
      * Creats connection to the Wallet system service.
      * If wallet is not found, user is redirect to WalletConnect login
      */
-    fun createSession(onConnectedS: (address: String) -> Unit): String {
+    fun createSession(onConnected: ((address: String) -> Unit)? = null): String {
         if(proxy != null) {
             onConnected?.let { it(sysSession.orEmpty()) }
             return sysSession.orEmpty()
         } else {
-            if (walletConnectKit?.isSessionStored!!) {
-                // TODO: create callback
-                //walletConnectKit?.loadSession(this)
-                walletConnectKit?.address?.let { onConnected?.let { it1 -> it1(it) } }
-            }
-            // TODO: create callback
-            //walletConnectKit?.createSession(callback = {})
-            onConnected = onConnectedS
-        }
-        return ""
-    }
-
-    private fun onSessionApproved() {
-        walletConnectKit?.address?.let {
-            onConnected?.let { it1 -> it1(it) }
+            throw NoSysWalletException("No system wallet found")
         }
     }
 
-    private fun onSessionConnected() {
-        walletConnectKit?.address ?: walletConnectKit?.requestHandshake()
-    }
 
     fun getAddress(): String {
         if (proxy != null) {
             return address.orEmpty()
-        }
-        return walletConnectKit?.address.orEmpty()
-    }
-
-    fun onMethodCall(call: Session.MethodCall) {
-        println(call.toString())
-    }
-
-    fun onStatus(status: Session.Status) {
-        println(status.toString())
-        when (status) {
-            is Session.Status.Approved -> onSessionApproved()
-            is Session.Status.Connected -> onSessionConnected()
-            else -> {println("Something else")}
+        } else {
+            throw NoSysWalletException("No system wallet found")
         }
     }
 

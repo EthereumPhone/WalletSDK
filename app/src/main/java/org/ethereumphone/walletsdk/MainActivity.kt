@@ -25,7 +25,11 @@ fun TestActivity() {
         message = "Launch control this is Houston, we are go for launch."
     ).whenComplete { s, throwable ->
         // Returns signed message
-        println(s)
+        if (s == WalletSDK.DECLINE) {
+            println("Sign message has been declined")
+        } else {
+            println(s)
+        }
     }
 
     // How to send send Transactions
@@ -35,7 +39,11 @@ fun TestActivity() {
         data = ""
     ).whenComplete {s, throwable ->
         // Returns tx-id
-        println(s)
+        if (s == WalletSDK.DECLINE) {
+            println("Send transaction has been declined")
+        } else {
+            println(s)
+        }
     }
 
 }
