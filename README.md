@@ -58,7 +58,7 @@ wallet.signMessage(
 
 ```kotlin
 // How to send send Transactions
-test.sendTransaction(
+wallet.sendTransaction(
     to = "0x3a4e6ed8b0f02bfbfaa3c6506af2db939ea5798c", // mhaas.eth
     value = "1000000000000000000", // 1 eth in wei
     data = ""
