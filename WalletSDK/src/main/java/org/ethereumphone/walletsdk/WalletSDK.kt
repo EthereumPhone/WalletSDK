@@ -15,7 +15,7 @@ import java.util.concurrent.CompletableFuture
 
 class WalletSDK(
     context: Context,
-    web3RPC: String = "https://cloudflare-eth.com"
+    web3RPC: String = "http://127.0.0.1:8545"
 )  {
 
     companion object {
