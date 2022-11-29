@@ -28,7 +28,7 @@ dependencyResolutionManagement {
 Then go to your module-level `build.gradle` file and add the following line to the `dependencies` section:
 
 ```groovy
-implementation 'com.github.EthereumPhone:WalletSDK:0.0.3'
+implementation 'com.github.EthereumPhone:WalletSDK:0.0.4'
 ```
 
 ### How to initialize SDK
