@@ -30,7 +30,7 @@ Then go to your module-level `build.gradle` file and add the following line to t
 ```groovy
 // Web3j needed for the WalletSDK
 implementation 'org.web3j:core:4.8.8-android'
-implementation 'com.github.EthereumPhone:WalletSDK:0.0.5'
+implementation 'com.github.EthereumPhone:WalletSDK:0.0.6'
 ```
 
 ### How to initialize SDK
