@@ -28,7 +28,9 @@ dependencyResolutionManagement {
 Then go to your module-level `build.gradle` file and add the following line to the `dependencies` section:
 
 ```groovy
-implementation 'com.github.EthereumPhone:WalletSDK:0.0.4'
+// Web3j needed for the WalletSDK
+implementation 'org.web3j:core:4.8.8-android'
+implementation 'com.github.EthereumPhone:WalletSDK:0.0.5'
 ```
 
 ### How to initialize SDK
@@ -36,6 +38,12 @@ implementation 'com.github.EthereumPhone:WalletSDK:0.0.4'
 ```kotlin
 // You just need to supply a context
 val wallet = WalletSDK(context)
+
+// You can also supply your own web3 rpc-url, like this:
+val wallet = WalletSDK(
+    context = context,
+    web3RPC = "YOUR_URL"
+)
 ```
 
 ### How to sign a message

@@ -52,9 +52,9 @@ class WalletSDK(
      * Sends transaction to
      */
 
-    fun sendTransaction(to: String, value: String, data: String, gasPriceVAL: String? = null, gasAmount: String = "21000", chainId: Int = 1): CompletableFuture<String> {
+    fun sendTransaction(to: String, value: String, data: String, gasPrice: String? = null, gasAmount: String = "21000", chainId: Int = 1): CompletableFuture<String> {
         val completableFuture = CompletableFuture<String>()
-        var gasPrice = gasPriceVAL
+        var gasPriceVAL = gasPrice
         if(proxy != null) {
             // Use system-wallet
 
@@ -64,10 +64,10 @@ class WalletSDK(
                 ).sendAsync().get()
 
                 if (gasPrice == null) {
-                    gasPrice = web3j?.ethGasPrice()?.sendAsync()?.get()?.gasPrice.toString()
+                    gasPriceVAL = web3j?.ethGasPrice()?.sendAsync()?.get()?.gasPrice.toString()
                 }
 
-                val reqID = sendTransaction.invoke(proxy, sysSession, to, value, data, ethGetTransactionCount.transactionCount.toString(), gasPrice, gasAmount, chainId)
+                val reqID = sendTransaction.invoke(proxy, sysSession, to, value, data, ethGetTransactionCount.transactionCount.toString(), gasPriceVAL, gasAmount, chainId)
 
                 var result = NOTFULFILLED
 
