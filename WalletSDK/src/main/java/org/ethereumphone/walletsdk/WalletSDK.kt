@@ -2,20 +2,15 @@ package org.ethereumphone.walletsdk
 
 import android.annotation.SuppressLint
 import android.content.Context
-import dev.pinkroom.walletconnectkit.WalletConnectKit
 import org.ethereumphone.walletsdk.model.NoSysWalletException
 import org.web3j.protocol.Web3j
 import org.web3j.protocol.core.DefaultBlockParameterName
 import org.web3j.protocol.http.HttpService
 import java.util.concurrent.CompletableFuture
 
-
-
-
-
 class WalletSDK(
     context: Context,
-    web3RPC: String = "http://127.0.0.1:8545"
+    web3RPC: String = "https://rpc.ankr.com/eth"
 )  {
 
     companion object {
@@ -37,7 +32,6 @@ class WalletSDK(
     @SuppressLint("WrongConstant")
     private val proxy = context.getSystemService(SYS_SERVICE)
     private var web3j: Web3j? = null
-    private var walletConnectKit: WalletConnectKit? = null
     private var sysSession: String? = null
 
     init {
@@ -46,7 +40,9 @@ class WalletSDK(
         } else {
             sysSession = createSession.invoke(proxy) as String
             val reqID = getAddress.invoke(proxy, sysSession) as String
-            Thread.sleep(100)
+            while ((hasBeenFulfilled.invoke(proxy, reqID) as String) == NOTFULFILLED) {
+                Thread.sleep(10)
+            }
             address = hasBeenFulfilled.invoke(proxy, reqID) as String
         }
         web3j = Web3j.build(HttpService(web3RPC))
@@ -88,7 +84,9 @@ class WalletSDK(
                 if (result == DECLINE) {
                     completableFuture.complete(DECLINE)
                 } else {
-                    completableFuture.complete(web3j!!.ethSendRawTransaction(result).sendAsync().get().transactionHash)
+                    val txResult = web3j!!.ethSendRawTransaction(result).sendAsync().get()
+                    val txHash = txResult.transactionHash
+                    completableFuture.complete(txHash)
                 }
             }
             return completableFuture
@@ -101,7 +99,7 @@ class WalletSDK(
         val completableFuture = CompletableFuture<String>()
         if(proxy != null) {
             CompletableFuture.runAsync {
-                val reqID = signMessageSys.invoke(proxy, sysSession, message) as String
+                val reqID = signMessageSys.invoke(proxy, sysSession, message, false) as String
 
                 var result =  NOTFULFILLED
 

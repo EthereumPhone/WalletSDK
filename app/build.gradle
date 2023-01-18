@@ -60,7 +60,12 @@ dependencies {
     // UI Tests
     androidTestImplementation 'androidx.compose.ui:ui-test-junit4:1.2.1'
 
+    // https://mvnrepository.com/artifact/org.web3j/core
+    implementation 'org.web3j:core:4.8.8-android'
+
+
     implementation project(":WalletSDK")
+
 
 
 }
