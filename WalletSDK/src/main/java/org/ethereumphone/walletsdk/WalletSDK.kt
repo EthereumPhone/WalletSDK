@@ -23,11 +23,12 @@ class WalletSDK(
 
     private val cls: Class<*> = Class.forName(SYS_SERVICE_CLASS)
     private val createSession = cls.declaredMethods[1]
-    private val getUserDecision = cls.declaredMethods[3]
-    private val hasBeenFulfilled = cls.declaredMethods[4]
-    private val sendTransaction =  cls.declaredMethods[5]
-    private val signMessageSys = cls.declaredMethods[6]
+    private val getUserDecision = cls.declaredMethods[4]
+    private val hasBeenFulfilled = cls.declaredMethods[5]
+    private val sendTransaction =  cls.declaredMethods[6]
+    private val signMessageSys = cls.declaredMethods[7]
     private val getAddress = cls.declaredMethods[2]
+    private val getChainId = cls.declaredMethods[3]
     private var address: String? = null
     @SuppressLint("WrongConstant")
     private val proxy = context.getSystemService(SYS_SERVICE)
@@ -95,11 +96,11 @@ class WalletSDK(
         }
     }
 
-    fun signMessage(message: String): CompletableFuture<String> {
+    fun signMessage(message: String, type: String = "personal_sign"): CompletableFuture<String> {
         val completableFuture = CompletableFuture<String>()
         if(proxy != null) {
             CompletableFuture.runAsync {
-                val reqID = signMessageSys.invoke(proxy, sysSession, message, false) as String
+                val reqID = signMessageSys.invoke(proxy, sysSession, message, type) as String
 
                 var result =  NOTFULFILLED
 
@@ -139,6 +140,22 @@ class WalletSDK(
     fun getAddress(): String {
         if (proxy != null) {
             return address.orEmpty()
+        } else {
+            throw NoSysWalletException("No system wallet found")
+        }
+    }
+
+    fun getChainId(): Int {
+        if (proxy != null) {
+            val completableFuture = CompletableFuture<Int>()
+            CompletableFuture.runAsync {
+                val reqId = getChainId.invoke(proxy, sysSession) as String
+                while ((hasBeenFulfilled.invoke(proxy, reqId) as String) == NOTFULFILLED) {
+                    Thread.sleep(10)
+                }
+                completableFuture.complete(Integer.parseInt(hasBeenFulfilled.invoke(proxy, reqId) as String))
+            }
+            return completableFuture.get()
         } else {
             throw NoSysWalletException("No system wallet found")
         }
