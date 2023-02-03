@@ -12,7 +12,14 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
 
         val wallet = WalletSDK(this)
-
+        println("Chain ID: ${wallet.getChainId()}")
+        wallet.changeChainid(5).whenComplete { s, throwable ->
+             if (throwable != null) {
+                println("Error: $throwable")
+            } else {
+                println("Chain ID: ${wallet.getChainId()}")
+            }
+        }
         wallet.signMessage(
             message = "Launch control, this is Houston. We have go for launch."
         ).whenComplete { s, throwable ->
@@ -34,6 +41,7 @@ class MainActivity : AppCompatActivity() {
                 println(t)
             }
         }
+
     }
 }
 
