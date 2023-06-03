@@ -30,7 +30,7 @@ Then go to your module-level `build.gradle` file and add the following line to t
 ```groovy
 // Web3j needed for the WalletSDK
 implementation 'org.web3j:core:4.8.8-android'
-implementation 'com.github.EthereumPhone:WalletSDK:0.0.8'
+implementation 'com.github.EthereumPhone:WalletSDK:0.0.9'
 ```
 
 ### How to initialize SDK
@@ -39,10 +39,12 @@ implementation 'com.github.EthereumPhone:WalletSDK:0.0.8'
 // You just need to supply a context
 val wallet = WalletSDK(context)
 
-// You can also supply your own web3 rpc-url, like this:
+// You can also supply your own web3j instance, like this:
+
+val web3j = Web3j.build(HttpService("https://rpc.ankr.com/eth"))
 val wallet = WalletSDK(
     context = context,
-    web3RPC = "YOUR_URL"
+    web3RPC = web3j
 )
 ```
 
@@ -50,32 +52,22 @@ val wallet = WalletSDK(
 
 ```kotlin
 // How to sign Message
-wallet.signMessage(
-    message = "Message to sign"
-).whenComplete { s, throwable ->
-    // Returns signed message
-    if (s == WalletSDK.DECLINE) {
-        println("Sign message has been declined")
-    } else {
-        println(s)
-    }
+CoroutineScope(Dispatchers.IO).launch {
+    val result = wallet.signMessage(
+        message = "Message to sign"
+    )
+    println(result)
 }
 ```
 
 ### How to send a Transaction
 
 ```kotlin
-// How to send send Transactions
-wallet.sendTransaction(
-    to = "0x3a4e6ed8b0f02bfbfaa3c6506af2db939ea5798c", // mhaas.eth
-    value = "1000000000000000000", // 1 eth in wei
-    data = ""
-).whenComplete {s, throwable ->
-    // Returns tx-id
-    if (s == WalletSDK.DECLINE) {
-        println("Send transaction has been declined")
-    } else {
-        println(s)
-    }
+CoroutineScope(Dispatchers.IO).launch {
+    val result = wallet.sendTransaction(
+        to = "0x3a4e6ed8b0f02bfbfaa3c6506af2db939ea5798c", // mhaas.eth
+        value = "1000000000000000000", // 1 eth in wei
+        data = "")
+    println(result)
 }
 ```
