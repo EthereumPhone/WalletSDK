@@ -62,6 +62,8 @@ class WalletSDK(
         deferredResult.await()
     }
 
+    fun getAddress(): String = address.orEmpty()
+
     suspend fun sendTransaction(
         to: String,
         value: String,
