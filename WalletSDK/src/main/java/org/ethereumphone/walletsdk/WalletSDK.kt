@@ -2,6 +2,8 @@ package org.ethereumphone.walletsdk
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.os.Build
+import androidx.annotation.RequiresApi
 import org.ethereumphone.walletsdk.model.NoSysWalletException
 import org.web3j.protocol.Web3j
 import org.web3j.protocol.core.DefaultBlockParameterName
@@ -10,7 +12,7 @@ import java.util.concurrent.CompletableFuture
 
 class WalletSDK(
     context: Context,
-    web3RPC: String = "https://rpc.ankr.com/eth"
+    web3RPC: String = "https://cloudflare-eth.com"
 )  {
 
     companion object {
@@ -54,6 +56,7 @@ class WalletSDK(
      * Sends transaction to
      */
 
+    @RequiresApi(Build.VERSION_CODES.N)
     fun sendTransaction(to: String, value: String, data: String, gasPrice: String? = null, gasAmount: String = "21000", chainId: Int = 1): CompletableFuture<String> {
         val completableFuture = CompletableFuture<String>()
         var gasPriceVAL = gasPrice
@@ -97,6 +100,7 @@ class WalletSDK(
         }
     }
 
+    @RequiresApi(Build.VERSION_CODES.N)
     fun signMessage(message: String, type: String = "personal_sign"): CompletableFuture<String> {
         val completableFuture = CompletableFuture<String>()
         if(proxy != null) {
@@ -146,6 +150,7 @@ class WalletSDK(
         }
     }
 
+    @RequiresApi(Build.VERSION_CODES.N)
     fun getChainId(): Int {
         if (proxy != null) {
             val completableFuture = CompletableFuture<Int>()
@@ -162,6 +167,7 @@ class WalletSDK(
         }
     }
 
+    @RequiresApi(Build.VERSION_CODES.N)
     fun changeChainid(chainId: Int): CompletableFuture<String> {
         val completableFuture = CompletableFuture<String>()
         if(proxy != null) {
