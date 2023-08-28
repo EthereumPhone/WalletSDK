@@ -84,7 +84,15 @@ class WalletSDK(
             }
             result = hasBeenFulfilled.invoke(proxy, reqId) as String
 
-            if (result == DECLINE) DECLINE else web3jInstance.ethSendRawTransaction(result).send().transactionHash
+            if (result == DECLINE) {
+                DECLINE
+            } else {
+                val txSendResult = web3jInstance.ethSendRawTransaction(result).send()
+                if (txSendResult.hasError()) {
+                    return@async txSendResult.error.message
+                }
+                txSendResult.transactionHash
+            }
         }
 
         deferredResult.await()
