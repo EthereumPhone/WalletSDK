@@ -8,6 +8,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import org.ethereumphone.walletsdk.model.NoSysWalletException
 import org.web3j.protocol.Web3j
 import org.web3j.protocol.core.DefaultBlockParameterName
@@ -62,7 +63,22 @@ class WalletSDK(
         deferredResult.await()
     }
 
-    fun getAddress(): String = address.orEmpty()
+    fun getAddress(): String {
+        return address ?: runBlocking {
+            val reqId = getAddress.invoke(proxy, sysSession) as? String
+                ?: throw IllegalStateException("Failed to get request ID")
+
+            // Polling mechanism
+            while (hasBeenFulfilled.invoke(proxy, reqId) as? String == NOTFULFILLED) {
+                delay(10)
+            }
+
+            address = hasBeenFulfilled.invoke(proxy, reqId) as? String
+                ?: throw IllegalStateException("Failed to get address after fulfillment")
+
+            address!!
+        }
+    }
 
     suspend fun sendTransaction(
         to: String,
