@@ -6,7 +6,8 @@ import androidx.appcompat.app.AppCompatActivity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-
+import org.web3j.protocol.Web3j
+import org.web3j.protocol.http.HttpService
 
 
 class MainActivity : AppCompatActivity() {
@@ -14,24 +15,34 @@ class MainActivity : AppCompatActivity() {
 
         super.onCreate(savedInstanceState)
 
-        val wallet = WalletSDK(this)
+        val bundlerRPCURL = BuildConfig.BUNDLER_RPC_URL
+
+        val wallet = WalletSDK(
+            context = this,
+            bundlerRPCUrl = bundlerRPCURL,
+            web3jInstance = Web3j.build(HttpService("https://sepolia.base.org"))
+        )
 
         CoroutineScope(Dispatchers.IO).launch {
-            val res1 = wallet.changeChain(
-                5,
-                "https://rpc.ankr.com/eth_goerli"
-            )
-            Log.d("changeChain", res1)
+            val address = wallet.getAddress()
+            Log.d("address", address)
 
-            val res2 = wallet.signMessage("Launch control, this is Houston. We have go for launch.")
-            Log.d("sign", res2)
-
-            val res3 = wallet.sendTransaction(
-                to = "0x3a4e6ed8b0f02bfbfaa3c6506af2db939ea5798c",
-                value = "1000000000000000000", // One eth in wei
+            val res = wallet.sendTransaction(
+                to = "0x33351BF3c35184a110fCF7a848b190dDFB33c3aa",
+                value = "100000000000000",
                 data = "",
+                chainId = 84532,
+                from = address
             )
-            Log.d("sendTransaction", res3)
+            println(res)
+
+            val signedMessage = wallet.signMessage(
+                message = "Hello World",
+                from = address,
+                chainId = 84532
+            )
+
+            Log.d("sign", signedMessage)
         }
     }
 }

@@ -2,160 +2,549 @@ package org.ethereumphone.walletsdk
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.os.ResultReceiver
+import android.util.Base64
+import com.esaulpaugh.headlong.abi.Tuple
+import com.esaulpaugh.headlong.abi.TupleType
+import com.esaulpaugh.headlong.abi.TypeFactory
+import com.google.gson.Gson
+import com.google.gson.JsonArray
+import com.google.gson.JsonObject
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
-import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import org.ethereumphone.walletsdk.model.NoSysWalletException
+import org.json.JSONObject
+import org.web3j.abi.FunctionEncoder
+import org.web3j.abi.TypeReference
+import org.web3j.abi.datatypes.Address
+import org.web3j.abi.datatypes.DynamicArray
+import org.web3j.abi.datatypes.DynamicBytes
+import org.web3j.abi.datatypes.Function
+import org.web3j.abi.datatypes.generated.Uint192
+import org.web3j.abi.datatypes.generated.Uint256
 import org.web3j.protocol.Web3j
 import org.web3j.protocol.core.DefaultBlockParameterName
+import org.web3j.protocol.core.methods.request.Transaction
 import org.web3j.protocol.http.HttpService
+import org.web3j.utils.Numeric
+import java.math.BigInteger
+import java.security.KeyFactory
+import java.security.NoSuchAlgorithmException
+import java.security.interfaces.ECPublicKey
+import java.security.spec.InvalidKeySpecException
+import java.security.spec.X509EncodedKeySpec
+import kotlin.coroutines.resume
 
-@SuppressLint("WrongConstant") // need this to make Android Studio behave
+
+@SuppressLint("WrongConstant")
 class WalletSDK(
     private val context: Context,
-    private var web3jInstance: Web3j = Web3j.build(HttpService("https://rpc.ankr.com/eth")), // starts on mainnet
+    private var web3jInstance: Web3j = Web3j.build(HttpService("https://rpc.ankr.com/eth")),
+    private val factoryAddress: String = "0x0BA5ED0c6AA8c49038F819E587E2633c4A9F428a",
+    private val entryPointAddress: String = "0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789",
+    private val bundlerRPCUrl: String
 ) {
-    // System service methods
+    // System service methods using reflection
     private val cls: Class<*> = Class.forName(SYS_SERVICE_CLASS)
-    private val changeChainId = cls.declaredMethods[1]
-    private val createSession = cls.declaredMethods[2]
-    private val getAddress = cls.declaredMethods[3]
-    private val getChainId = cls.declaredMethods[4]
-    private val getUserDecision = cls.declaredMethods[5]
-    private val hasBeenFulfilled = cls.declaredMethods[6]
-    private val sendTransaction =  cls.declaredMethods[7]
-    private val signMessageSys = cls.declaredMethods[8]
+    private val createSession = cls.declaredMethods.first { it.name == "createSession" }
+    private val sendTransaction = cls.declaredMethods.first { it.name == "sendTransaction" }
+    private val signMessage = cls.declaredMethods.first { it.name == "signMessage" }
+    private val switchAccount = cls.declaredMethods.first { it.name == "switchAccount" }
+    private val getAddress = cls.declaredMethods.first { it.name == "getAddress" }
+    private val getChainId = cls.declaredMethods.first { it.name == "getChainId" }
+    private val changeChainId = cls.declaredMethods.first { it.name == "changeChainId" }
+    private val isWalletConnected = cls.declaredMethods.first { it.name == "isWalletConnected" }
 
     private var address: String? = null
-    private var proxy : Any? = null
-    private var sysSession: String? = null
+    private var proxy: Any? = null
+    private lateinit var session: String
 
     init {
         proxy = initializeProxyService()
-        sysSession = createSession.invoke(proxy) as String
+        session = createSession.invoke(proxy) as String
 
         CoroutineScope(Dispatchers.IO).launch {
-            address = initialAddressRequest()
+            address = getAddress()
         }
     }
 
-    /**
-     * In case the system-service is not found, it throws an execption in the init body of the WalletSDK, so that I don't need to check the proxy on every function
-     */
-    private fun initializeProxyService() = context.getSystemService(SYS_SERVICE) ?: throw NoSysWalletException("System wallet not found on this device")
+    private fun initializeProxyService() =
+        context.getSystemService(SYS_SERVICE) ?: throw NoSysWalletException("System wallet not found on this device")
 
-    /**
-     * Wallet only supports one address as of right now, thus we only need to get the wallet address once
-     */
-    private suspend fun initialAddressRequest(): String = coroutineScope {
-        val deferredResult = async {
-            val reqId = getAddress.invoke(proxy, sysSession) as String
-            while((hasBeenFulfilled.invoke(proxy, reqId) as String) == NOTFULFILLED) {
-                delay(10)
+    suspend fun getAddress(): String = suspendCancellableCoroutine { continuation ->
+        val receiver = object : ResultReceiver(Handler(Looper.getMainLooper())) {
+            override fun onReceiveResult(resultCode: Int, resultData: Bundle?) {
+                val result = resultData?.getString("result")
+                if (result != null) {
+                    try {
+                        val realAddress = decodeECPublicKey(result)
+                        val (x, y) = getPublicKeyCoordinates(realAddress)
+                        CoroutineScope(Dispatchers.IO).launch {
+                            val computedAddress = getPrecomputedAddress(x, y)
+                            address = computedAddress
+                            continuation.resume(computedAddress)
+                        }
+                    } catch (
+                        e: Exception
+                    ) {
+                        e.printStackTrace()
+                        continuation.resume("")
+                    }
+
+                } else {
+                    continuation.resume("")
+                }
             }
-            hasBeenFulfilled.invoke(proxy, reqId) as String
         }
 
-        deferredResult.await()
+        getAddress.invoke(proxy, session, receiver)
     }
 
-    fun getAddress(): String {
-        return address ?: runBlocking {
-            val reqId = getAddress.invoke(proxy, sysSession) as? String
-                ?: throw IllegalStateException("Failed to get request ID")
+    suspend fun getPair(): Pair<BigInteger, BigInteger>? = suspendCancellableCoroutine { continuation ->
+        val receiver = object : ResultReceiver(Handler(Looper.getMainLooper())) {
+            override fun onReceiveResult(resultCode: Int, resultData: Bundle?) {
+                val result = resultData?.getString("result")
+                if (result != null) {
+                    try {
+                        val realAddress = decodeECPublicKey(result)
+                        continuation.resume(getPublicKeyCoordinates(realAddress))
+                    } catch (
+                        e: Exception
+                    ) {
+                        e.printStackTrace()
+                        continuation.resume(null)
+                    }
 
-            // Polling mechanism
-            while (hasBeenFulfilled.invoke(proxy, reqId) as? String == NOTFULFILLED) {
-                delay(10)
+                } else {
+                    continuation.resume(null)
+                }
             }
+        }
 
-            address = hasBeenFulfilled.invoke(proxy, reqId) as? String
-                ?: throw IllegalStateException("Failed to get address after fulfillment")
+        getAddress.invoke(proxy, session, receiver)
+    }
 
-            address!!
+    /**
+     * Helper functions
+     */
+    fun getPublicKeyCoordinates(publicKey: ECPublicKey): Pair<BigInteger, BigInteger> {
+        val point = publicKey.w
+        return Pair(
+            point.affineX,
+            point.affineY
+        )
+    }
+
+    fun encodeInitCode(
+        factoryAddress: String = "0x0BA5ED0c6AA8c49038F819E587E2633c4A9F428a",
+        owners: List<ByteArray>,
+        nonce: BigInteger
+    ): String {
+        val function = com.esaulpaugh.headlong.abi.Function.parse("createAccount(bytes[],uint256)", "(address)")
+        val encodedFunction = function.encodeCall(Tuple.of(owners.toTypedArray(), nonce))
+
+        val concat = Numeric.hexStringToByteArray(factoryAddress) + encodedFunction.array()
+        return Numeric.toHexString(concat)
+    }
+
+
+    /**
+     * Get the address of a public key using the precompiled contract
+     */
+    suspend fun getPrecomputedAddress(
+        pubKeyX: BigInteger,
+        pubKeyY: BigInteger,
+        salt: BigInteger = BigInteger.ZERO
+    ): String = withContext(Dispatchers.IO) {
+        val owner = encodeSignatureData(pubKeyX, pubKeyY)
+        val function = Function(
+            "getAddress",
+            listOf(
+                DynamicArray(DynamicBytes::class.java, DynamicBytes(owner)),
+                Uint256(salt)
+            ),
+            listOf(TypeReference.create(org.web3j.abi.datatypes.Address::class.java))
+        )
+
+        val encodedFunction = FunctionEncoder.encode(function)
+
+        val response = try {
+             web3jInstance.ethCall(
+                org.web3j.protocol.core.methods.request.Transaction.createEthCallTransaction(
+                    null,
+                    factoryAddress,
+                    encodedFunction
+                ),
+                DefaultBlockParameterName.LATEST
+            ).sendAsync().get()
+        } catch (e: Exception) {
+            throw Exception("Error calling getAddress: ${e.message}")
+        }
+        if (response.hasError()) {
+            throw Exception("Error calling getAddress: ${response.error.message}")
+        }
+        return@withContext org.web3j.abi.FunctionReturnDecoder.decode(
+            response.value,
+            function.outputParameters
+        )[0].value as String
+    }
+
+    /**
+     * Function to abi.encode the r,s into a SignatureData bytearray
+     */
+    fun encodeSignatureData(r: BigInteger, s: BigInteger): ByteArray {
+        // Define the struct type
+        val structType = TupleType.parse<Tuple>("(uint256,uint256)")
+
+        // Create the tuple with our values
+        val signatureData = Tuple.of(r, s)
+
+        // Encode the tuple
+        val encoded = structType.encode(signatureData)
+
+        // Convert the ByteBuffer to ByteArray
+        return encoded.array()
+    }
+
+    fun decodeECPublicKey(encodedKey: String?): ECPublicKey {
+        try {
+            // Decode Base64 string to byte array
+            val decodedKey: ByteArray = Base64.decode(encodedKey, Base64.NO_WRAP)
+
+
+            // Create X509EncodedKeySpec from decoded bytes
+            val keySpec = X509EncodedKeySpec(decodedKey)
+
+
+            // Get KeyFactory for EC algorithm
+            val keyFactory: KeyFactory = KeyFactory.getInstance("EC")
+
+
+            // Generate public key from spec
+            return keyFactory.generatePublic(keySpec) as ECPublicKey
+        } catch (e: NoSuchAlgorithmException) {
+            throw e
+        } catch (e: InvalidKeySpecException) {
+            throw e
+        } catch (e: java.lang.Exception) {
+            throw RuntimeException("Error decoding public key", e)
         }
     }
 
     suspend fun sendTransaction(
+        from: String,
         to: String,
         value: String,
         data: String,
-        gasPrice: String? = null,
-        gasAmount: String = "21000"
-    ): String = coroutineScope {
-        val deferredResult = async {
-            val result: String
-            val gas = if (gasPrice.isNullOrBlank()) {
-                web3jInstance.ethGasPrice().send().gasPrice.toString()
-            } else gasPrice
-            val ethGetTransactionCount = web3jInstance.ethGetTransactionCount(address, DefaultBlockParameterName.LATEST).send()
-            val reqId = sendTransaction.invoke(proxy, sysSession, to, value, data, ethGetTransactionCount.transactionCount.toString(), gas, gasAmount, 0)
+        chainId: Int? = null,
+        rpcEndpoint: String? = null,
+    ): String = suspendCancellableCoroutine { continuation ->
+        try {
+            val function = org.web3j.abi.datatypes.Function(
+                "execute",  // function name
+                listOf(
+                    Address(to),  // to
+                    Uint256(BigInteger(value)),      // value
+                    DynamicBytes(data.toByteArray())  // data (empty for simple ETH transfer)
+                ),
+                emptyList()  // output parameters
+            )
+            val callData = FunctionEncoder.encode(function)
 
-            while((hasBeenFulfilled.invoke(proxy, reqId) as String) == NOTFULFILLED) {
-                delay(10)
-            }
-            result = hasBeenFulfilled.invoke(proxy, reqId) as String
+            val nonceForUserOp = runBlocking { getNonce(from) }
 
-            if (result == DECLINE) {
-                DECLINE
-            } else {
-                val txSendResult = web3jInstance.ethSendRawTransaction(result).send()
-                if (txSendResult.hasError()) {
-                    return@async txSendResult.error.message
+            val gasPrices = getGasPrice(bundlerRPCUrl = bundlerRPCUrl)
+
+            val callGasLimit = BigInteger("1000000")
+            val verificationGasLimit = BigInteger("1000000")
+            val preVerificationGas = BigInteger("300000")
+
+            var initCode = ""
+
+            if (!isDeployed(from)) {
+                val pair: Pair<BigInteger, BigInteger>? = runBlocking {  getPair() }
+                pair?.let {
+                    val ownerData = encodeSignatureData(pair.first, pair.second)
+                    initCode = encodeInitCode(
+                        factoryAddress = factoryAddress,
+                        owners = listOf(ownerData),
+                        nonce = nonceForUserOp
+                    )
                 }
-                txSendResult.transactionHash
             }
-        }
 
-        deferredResult.await()
+            // Create the UserOp
+            val userOp = UserOperation(
+                sender = from,
+                nonce = nonceForUserOp,
+                initCode = initCode,
+                callData = callData,
+                // TODO: Implement actual gas estimation
+                callGasLimit = callGasLimit,
+                verificationGasLimit = verificationGasLimit,
+                preVerificationGas = preVerificationGas,
+                maxFeePerGas = gasPrices.maxFeePerGas,
+                maxPriorityFeePerGas = gasPrices.maxPriorityFeePerGas,
+                // TODO: Research and implement paymaster
+                paymasterAndData = "",
+                // Signature gets filled in later
+                signature = ""
+            )
+
+            val receiver = object : ResultReceiver(Handler(Looper.getMainLooper())) {
+                override fun onReceiveResult(resultCode: Int, resultData: Bundle?) {
+                    val result = resultData?.getString("result")
+                    if (result == DECLINE) {
+                        continuation.resume(DECLINE)
+                    } else if (result != null) {
+                        CoroutineScope(Dispatchers.IO).launch {
+                            println("Signature: $result")
+                            val signedUserOp = userOp.copy(signature = result)
+                            val out = sendUserOpToBundler(signedUserOp)
+                            // {"jsonrpc":"2.0","id":1,"result":"User OP hash"}
+                            try {
+                                val jsonObject = JSONObject(out)
+                                if (jsonObject.has("result")) {
+                                    continuation.resume(jsonObject.getString("result"))
+                                } else {
+                                    continuation.resume("Error: ${jsonObject.getString("error")}")
+                                }
+                            } catch (e: Exception) {
+                                e.printStackTrace()
+                                continuation.resume("Error: ${e.message}")
+                            }
+                        }
+                    } else {
+                        continuation.resume("")
+                    }
+                }
+            }
+
+            sendTransaction.invoke(
+                proxy,
+                session,
+                from,
+                to,
+                value,
+                data,
+                nonceForUserOp.toString(),
+                gasPrices.maxFeePerGas.toString(),
+                gasPrices.maxPriorityFeePerGas.toString(),
+                BigInteger.ZERO.toString(),
+                initCode,
+                chainId,
+                receiver
+            )
+        } catch (e: Exception) {
+            e.printStackTrace()
+            continuation.resume("Error: ${e.message}")
+        }
     }
 
-    suspend fun signMessage(message: String, type: String = "personal_sign"): String = coroutineScope {
+    fun isDeployed(address: String): Boolean {
+        val code = web3jInstance.ethGetCode(address, DefaultBlockParameterName.LATEST).send()
 
-        val deferredResult = async {
-            val reqId = signMessageSys.invoke(proxy, sysSession, message, type) as String
-            while((hasBeenFulfilled.invoke(proxy, reqId) as String) == NOTFULFILLED) {
-                delay(10)
-            }
-            hasBeenFulfilled.invoke(proxy, reqId) as String
-        }
-        deferredResult.await()
+        return code.code.length > 2
     }
 
+    fun sendUserOpToBundler(
+        userOp: UserOperation
+    ): String {
+        val client = OkHttpClient()
 
-    suspend fun getChainId(): Int = coroutineScope {
-
-        val deferredResult = async {
-            val reqId = getChainId.invoke(proxy, sysSession) as String
-            while((hasBeenFulfilled.invoke(proxy, reqId) as String) == NOTFULFILLED) {
-                delay(10)
-            }
-            Integer.parseInt(hasBeenFulfilled.invoke(proxy, reqId) as String)
+        // Create the UserOperation JSON object
+        val userOpJson = JsonObject().apply {
+            addProperty("sender", userOp.sender)
+            addProperty("nonce", "0x" + userOp.nonce.toString(16))
+            addProperty("initCode", if (userOp.initCode.isEmpty()) "0x" else userOp.initCode)
+            addProperty("callData", if (userOp.callData.isEmpty()) "0x" else userOp.callData)
+            addProperty("callGasLimit", "0x" + userOp.callGasLimit.toString(16))
+            addProperty("verificationGasLimit", "0x" + userOp.verificationGasLimit.toString(16))
+            addProperty("preVerificationGas", "0x" + userOp.preVerificationGas.toString(16))
+            addProperty("maxFeePerGas", "0x" + userOp.maxFeePerGas.toString(16))
+            addProperty("maxPriorityFeePerGas", "0x" + userOp.maxPriorityFeePerGas.toString(16))
+            addProperty("paymasterAndData", if (userOp.paymasterAndData.isEmpty()) "0x" else userOp.paymasterAndData)
+            addProperty("signature", userOp.signature)
         }
-        deferredResult.await()
+
+        // Create the params array
+        val paramsArray = JsonArray().apply {
+            add(userOpJson)
+            add("0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789") // EntryPoint contract address
+        }
+
+        // Create the complete RPC request
+        val rpcRequest = JsonObject().apply {
+            addProperty("jsonrpc", "2.0")
+            addProperty("method", "eth_sendUserOperation")
+            add("params", paramsArray)
+            addProperty("id", 1)
+        }
+
+        // Create and execute the HTTP request
+        val request = Request.Builder()
+            .url(bundlerRPCUrl)
+            .post(rpcRequest.toString().toRequestBody("application/json".toMediaType()))
+            .build()
+
+        client.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) {
+                throw Exception("Failed to send UserOperation: ${response.body?.string()}")
+            }
+            // Return the response body which will contain the userOpHash
+            return response.body?.string() ?: ""
+        }
+    }
+
+    fun getGasPrice(bundlerRPCUrl: String): GasPrice {
+        val client = OkHttpClient()
+
+        val rpcRequest = JsonObject().apply {
+            addProperty("jsonrpc", "2.0")
+            addProperty("method", "pimlico_getUserOperationGasPrice")
+            add("params", JsonArray())
+            addProperty("id", 1)
+        }
+
+        val request = Request.Builder()
+            .url(bundlerRPCUrl)
+            .post(rpcRequest.toString().toRequestBody("application/json".toMediaType()))
+            .build()
+
+        client.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) {
+                throw Exception("Failed to get gas price: ${response.body?.string()}")
+            }
+
+            val responseBody = response.body?.string()
+            val jsonResponse = Gson().fromJson(responseBody, JsonObject::class.java)
+            val fast = jsonResponse.getAsJsonObject("result").getAsJsonObject("fast")
+
+            return GasPrice(
+                maxFeePerGas = BigInteger(fast.get("maxFeePerGas").asString.substring(2), 16),
+                maxPriorityFeePerGas = BigInteger(fast.get("maxPriorityFeePerGas").asString.substring(2), 16)
+            )
+        }
     }
 
     /**
-     *
+     * Function to get correct nonce for UserOp
      */
-    suspend fun changeChain(
-        chainId: Int,
-        rpcEndpoint: String
-    ): String = coroutineScope {
+    suspend fun getNonce(
+        senderAddress: String
+    ): BigInteger = withContext(Dispatchers.IO) {
+        val function = Function(
+            "getNonce",
+            listOf(
+                Address(senderAddress),
+                Uint192(BigInteger.ZERO) // key = 0
+            ),
+            listOf(TypeReference.create(Uint256::class.java))
+        )
 
-        val deferredResult = async {
-            web3jInstance = Web3j.build(HttpService(rpcEndpoint))
-            val reqId = changeChainId.invoke(proxy, sysSession, chainId) as String
-            while((hasBeenFulfilled.invoke(proxy, reqId) as String) == NOTFULFILLED) {
-                delay(10)
-            }
-            hasBeenFulfilled.invoke(proxy, reqId) as String
+        val encodedFunction = FunctionEncoder.encode(function)
+        val transaction = Transaction.createEthCallTransaction(
+            senderAddress,
+            entryPointAddress,
+            encodedFunction
+        )
+
+        val response = web3jInstance.ethCall(
+            transaction,
+            DefaultBlockParameterName.LATEST
+        ).send()
+
+        if (response.hasError()) {
+            throw Exception("Error getting nonce: ${response.error.message}")
         }
-        deferredResult.await()
+        BigInteger(response.value.substring(2), 16)  // Added radix parameter 16 for hex
+    }
+
+    suspend fun signMessage(message: String, chainId: Int, from: String): String =
+        suspendCancellableCoroutine { continuation ->
+            val type = "personal_sign"
+            val receiver = object : ResultReceiver(Handler(Looper.getMainLooper())) {
+                override fun onReceiveResult(resultCode: Int, resultData: Bundle?) {
+                    val result = resultData?.getString("result")
+                    continuation.resume(result ?: "")
+                }
+            }
+
+            signMessage.invoke(proxy, session, message, chainId.toString(), from, type, receiver)
+        }
+
+    suspend fun getChainId(): Int = suspendCancellableCoroutine { continuation ->
+        val receiver = object : ResultReceiver(Handler(Looper.getMainLooper())) {
+            override fun onReceiveResult(resultCode: Int, resultData: Bundle?) {
+                val result = resultData?.getString("result")
+                continuation.resume(result?.toIntOrNull() ?: 1)
+            }
+        }
+
+        getChainId.invoke(proxy, session, receiver)
+    }
+
+    suspend fun changeChain(chainId: Int, rpcEndpoint: String): String =
+        suspendCancellableCoroutine { continuation ->
+            web3jInstance = Web3j.build(HttpService(rpcEndpoint))
+
+            val receiver = object : ResultReceiver(Handler(Looper.getMainLooper())) {
+                override fun onReceiveResult(resultCode: Int, resultData: Bundle?) {
+                    val result = resultData?.getString("result")
+                    continuation.resume(result ?: "")
+                }
+            }
+
+            changeChainId.invoke(proxy, session, chainId, receiver)
+        }
+
+    suspend fun switchAccount(index: Int): String = suspendCancellableCoroutine { continuation ->
+        var isCompleted = false
+
+        val receiver = object : ResultReceiver(Handler(Looper.getMainLooper())) {
+            override fun onReceiveResult(resultCode: Int, resultData: Bundle?) {
+                if (!isCompleted) {
+                    isCompleted = true
+                    val result = resultData?.getString("result")
+                    continuation.resume(result ?: "")
+                }
+            }
+        }
+
+        continuation.invokeOnCancellation {
+            if (!isCompleted) {
+                isCompleted = true
+            }
+        }
+
+        try {
+            switchAccount.invoke(proxy, session, index, receiver)
+        } catch (e: Exception) {
+            if (!isCompleted) {
+                isCompleted = true
+                continuation.resume("") // Or handle error case differently
+            }
+        }
+    }
+
+    fun isWalletConnected(): Boolean {
+        return try {
+            isWalletConnected.invoke(proxy, session) as Boolean
+        } catch (e: Exception) {
+            false
+        }
     }
 
     fun isEthOS(): Boolean {
@@ -166,6 +555,24 @@ class WalletSDK(
         const val SYS_SERVICE_CLASS = "android.os.WalletProxy"
         const val SYS_SERVICE = "wallet"
         const val DECLINE = "decline"
-        const val NOTFULFILLED = "notfulfilled"
     }
+
+    data class UserOperation(
+        val sender: String,
+        val nonce: BigInteger,
+        val initCode: String,
+        val callData: String,
+        val callGasLimit: BigInteger,
+        val verificationGasLimit: BigInteger,
+        val preVerificationGas: BigInteger,
+        val maxFeePerGas: BigInteger,
+        val maxPriorityFeePerGas: BigInteger,
+        val paymasterAndData: String,
+        var signature: String
+    )
+
+    data class GasPrice(
+        val maxFeePerGas: BigInteger,
+        val maxPriorityFeePerGas: BigInteger
+    )
 }
