@@ -84,6 +84,10 @@ class WalletSDK(
         context.getSystemService(SYS_SERVICE) ?: throw NoSysWalletException("System wallet not found on this device")
 
     suspend fun getAddress(): String = suspendCancellableCoroutine { continuation ->
+        address?.let {
+            continuation.resume(it)
+            return@suspendCancellableCoroutine
+        }
         val receiver = object : ResultReceiver(Handler(Looper.getMainLooper())) {
             override fun onReceiveResult(resultCode: Int, resultData: Bundle?) {
                 val result = resultData?.getString("result")
@@ -257,7 +261,7 @@ class WalletSDK(
                 listOf(
                     Address(to),  // to
                     Uint256(BigInteger(value)),      // value
-                    DynamicBytes(data.toByteArray())  // data (empty for simple ETH transfer)
+                    DynamicBytes(Numeric.hexStringToByteArray(data))  // data (empty for simple ETH transfer)
                 ),
                 emptyList()  // output parameters
             )

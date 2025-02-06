@@ -6,6 +6,8 @@ import androidx.appcompat.app.AppCompatActivity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import org.web3j.protocol.Web3j
 import org.web3j.protocol.http.HttpService
 
@@ -23,8 +25,12 @@ class MainActivity : AppCompatActivity() {
             web3jInstance = Web3j.build(HttpService("https://sepolia.base.org"))
         )
 
+
         CoroutineScope(Dispatchers.IO).launch {
+            val beforeAddr = System.currentTimeMillis()
             val address = wallet.getAddress()
+            val afterAddr = System.currentTimeMillis()
+            Log.d("addresstiming", (afterAddr-beforeAddr).toString())
             Log.d("address", address)
 
             val res = wallet.sendTransaction(
