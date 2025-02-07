@@ -70,6 +70,7 @@ class WalletSDK(
     private var address: String? = null
     private var proxy: Any? = null
     private lateinit var session: String
+    private var bundlerRPC = bundlerRPCUrl
 
     init {
         proxy = initializeProxyService()
@@ -269,7 +270,7 @@ class WalletSDK(
 
             val nonceForUserOp = runBlocking { getNonce(from) }
 
-            val gasPrices = getGasPrice(bundlerRPCUrl = bundlerRPCUrl)
+            val gasPrices = getGasPrice(bundlerRPCUrl = bundlerRPC)
 
             val callGasLimit = BigInteger("1000000")
             val verificationGasLimit = BigInteger("1000000")
@@ -399,7 +400,7 @@ class WalletSDK(
 
         // Create and execute the HTTP request
         val request = Request.Builder()
-            .url(bundlerRPCUrl)
+            .url(bundlerRPC)
             .post(rpcRequest.toString().toRequestBody("application/json".toMediaType()))
             .build()
 
@@ -500,9 +501,10 @@ class WalletSDK(
         getChainId.invoke(proxy, session, receiver)
     }
 
-    suspend fun changeChain(chainId: Int, rpcEndpoint: String): String =
+    suspend fun changeChain(chainId: Int, rpcEndpoint: String, mBundlerRPCUrl: String): String =
         suspendCancellableCoroutine { continuation ->
             web3jInstance = Web3j.build(HttpService(rpcEndpoint))
+            bundlerRPC = mBundlerRPCUrl
 
             val receiver = object : ResultReceiver(Handler(Looper.getMainLooper())) {
                 override fun onReceiveResult(resultCode: Int, resultData: Bundle?) {
