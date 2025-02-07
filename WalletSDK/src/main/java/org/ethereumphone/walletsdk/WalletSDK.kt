@@ -253,6 +253,7 @@ class WalletSDK(
         to: String,
         value: String,
         data: String,
+        callGas: BigInteger?,
         chainId: Int? = null,
         rpcEndpoint: String? = null,
     ): String = suspendCancellableCoroutine { continuation ->
@@ -272,7 +273,7 @@ class WalletSDK(
 
             val gasPrices = getGasPrice(bundlerRPCUrl = bundlerRPC)
 
-            val callGasLimit = BigInteger("1000000")
+            val callGasLimit = callGas ?: BigInteger("1000000")
             val verificationGasLimit = BigInteger("1000000")
             val preVerificationGas = BigInteger("300000")
 
