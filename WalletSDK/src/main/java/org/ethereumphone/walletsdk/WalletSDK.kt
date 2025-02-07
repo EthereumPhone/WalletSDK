@@ -348,7 +348,7 @@ class WalletSDK(
                 nonceForUserOp.toString(),
                 gasPrices.maxFeePerGas.toString(),
                 gasPrices.maxPriorityFeePerGas.toString(),
-                BigInteger.ZERO.toString(),
+                callGasLimit.toString(),
                 initCode,
                 chainId,
                 receiver
