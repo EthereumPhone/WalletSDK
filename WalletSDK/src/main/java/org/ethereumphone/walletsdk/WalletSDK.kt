@@ -34,11 +34,13 @@ import org.web3j.abi.datatypes.DynamicBytes
 import org.web3j.abi.datatypes.Function
 import org.web3j.abi.datatypes.generated.Uint192
 import org.web3j.abi.datatypes.generated.Uint256
+import org.web3j.crypto.ContractUtils
 import org.web3j.protocol.Web3j
 import org.web3j.protocol.core.DefaultBlockParameterName
 import org.web3j.protocol.core.methods.request.Transaction
 import org.web3j.protocol.http.HttpService
 import org.web3j.utils.Numeric
+import java.io.ByteArrayOutputStream
 import java.math.BigInteger
 import java.security.KeyFactory
 import java.security.NoSuchAlgorithmException
@@ -96,10 +98,12 @@ class WalletSDK(
                     try {
                         val realAddress = decodeECPublicKey(result)
                         val (x, y) = getPublicKeyCoordinates(realAddress)
+                        val ownersEncoded = encodeSignatureData(x, y)
                         CoroutineScope(Dispatchers.IO).launch {
-                            val computedAddress = getPrecomputedAddress(x, y)
-                            address = computedAddress
-                            continuation.resume(computedAddress)
+                            val locallyComputed = Create2Calculator.getAddress(listOf(ownersEncoded), BigInteger.ZERO)
+                            address = locallyComputed
+
+                            continuation.resume(locallyComputed)
                         }
                     } catch (
                         e: Exception
@@ -115,6 +119,27 @@ class WalletSDK(
         }
 
         getAddress.invoke(proxy, session, receiver)
+    }
+
+    private fun encodePacked(items: List<DynamicBytes>): ByteArray {
+        val result = ByteArrayOutputStream()
+
+        // Write length of array
+        result.write(encodeInt(items.size.toBigInteger()))
+
+        // Write each item
+        items.forEach { bytes ->
+            // Write length of bytes
+            result.write(encodeInt(bytes.value.size.toBigInteger()))
+            // Write bytes
+            result.write(bytes.value)
+        }
+
+        return result.toByteArray()
+    }
+
+    private fun encodeInt(value: BigInteger): ByteArray {
+        return Numeric.toBytesPadded(value, 32)
     }
 
     suspend fun getPair(): Pair<BigInteger, BigInteger>? = suspendCancellableCoroutine { continuation ->
