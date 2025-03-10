@@ -22,7 +22,7 @@ class MainActivity : AppCompatActivity() {
         val wallet = WalletSDK(
             context = this,
             bundlerRPCUrl = bundlerRPCURL,
-            web3jInstance = Web3j.build(HttpService("https://sepolia.base.org"))
+            web3jInstance = Web3j.build(HttpService("https://base.llamarpc.com"))
         )
 
 
@@ -33,19 +33,9 @@ class MainActivity : AppCompatActivity() {
             Log.d("addresstiming", (afterAddr-beforeAddr).toString())
             Log.d("address", address)
 
-            val res = wallet.sendTransaction(
-                to = "0x33351BF3c35184a110fCF7a848b190dDFB33c3aa",
-                value = "100000000000000",
-                data = "",
-                chainId = 84532,
-                from = address
-            )
-            println(res)
-
             val signedMessage = wallet.signMessage(
                 message = "Hello World",
-                from = address,
-                chainId = 84532
+                chainId = 8453
             )
 
             Log.d("sign", signedMessage)
