@@ -274,113 +274,115 @@ class WalletSDK(
     }
 
     suspend fun sendTransaction(
-        from: String,
         to: String,
         value: String,
         data: String,
         callGas: BigInteger?,
         chainId: Int? = null,
         rpcEndpoint: String? = null,
-    ): String = suspendCancellableCoroutine { continuation ->
-        try {
-            val function = org.web3j.abi.datatypes.Function(
-                "execute",  // function name
-                listOf(
-                    Address(to),  // to
-                    Uint256(BigInteger(value)),      // value
-                    DynamicBytes(Numeric.hexStringToByteArray(data))  // data (empty for simple ETH transfer)
-                ),
-                emptyList()  // output parameters
-            )
-            val callData = FunctionEncoder.encode(function)
+    ): String {
+        val from = getAddress()
+        return suspendCancellableCoroutine { continuation ->
+            try {
+                val function = org.web3j.abi.datatypes.Function(
+                    "execute",  // function name
+                    listOf(
+                        Address(to),  // to
+                        Uint256(BigInteger(value)),      // value
+                        DynamicBytes(Numeric.hexStringToByteArray(data))  // data (empty for simple ETH transfer)
+                    ),
+                    emptyList()  // output parameters
+                )
+                val callData = FunctionEncoder.encode(function)
 
-            val nonceForUserOp = runBlocking { getNonce(from) }
+                val nonceForUserOp = runBlocking { getNonce(from) }
 
-            val gasPrices = getGasPrice(bundlerRPCUrl = bundlerRPC)
+                val gasPrices = getGasPrice(bundlerRPCUrl = bundlerRPC)
 
-            val callGasLimit = callGas ?: BigInteger("1000000")
-            val verificationGasLimit = BigInteger("1000000")
-            val preVerificationGas = BigInteger("300000")
+                val callGasLimit = callGas ?: BigInteger("1000000")
+                val verificationGasLimit = BigInteger("1000000")
+                val preVerificationGas = BigInteger("300000")
 
-            var initCode = ""
+                var initCode = ""
 
-            if (!isDeployed(from)) {
-                val pair: Pair<BigInteger, BigInteger>? = runBlocking {  getPair() }
-                pair?.let {
-                    val ownerData = encodeSignatureData(pair.first, pair.second)
-                    initCode = encodeInitCode(
-                        factoryAddress = factoryAddress,
-                        owners = listOf(ownerData),
-                        nonce = nonceForUserOp
-                    )
-                }
-            }
-
-            // Create the UserOp
-            val userOp = UserOperation(
-                sender = from,
-                nonce = nonceForUserOp,
-                initCode = initCode,
-                callData = callData,
-                // TODO: Implement actual gas estimation
-                callGasLimit = callGasLimit,
-                verificationGasLimit = verificationGasLimit,
-                preVerificationGas = preVerificationGas,
-                maxFeePerGas = gasPrices.maxFeePerGas,
-                maxPriorityFeePerGas = gasPrices.maxPriorityFeePerGas,
-                // TODO: Research and implement paymaster
-                paymasterAndData = "",
-                // Signature gets filled in later
-                signature = ""
-            )
-
-            val receiver = object : ResultReceiver(Handler(Looper.getMainLooper())) {
-                override fun onReceiveResult(resultCode: Int, resultData: Bundle?) {
-                    val result = resultData?.getString("result")
-                    if (result == DECLINE) {
-                        continuation.resume(DECLINE)
-                    } else if (result != null) {
-                        CoroutineScope(Dispatchers.IO).launch {
-                            println("Signature: $result")
-                            val signedUserOp = userOp.copy(signature = result)
-                            val out = sendUserOpToBundler(signedUserOp)
-                            // {"jsonrpc":"2.0","id":1,"result":"User OP hash"}
-                            try {
-                                val jsonObject = JSONObject(out)
-                                if (jsonObject.has("result")) {
-                                    continuation.resume(jsonObject.getString("result"))
-                                } else {
-                                    continuation.resume("Error: ${jsonObject.getString("error")}")
-                                }
-                            } catch (e: Exception) {
-                                e.printStackTrace()
-                                continuation.resume("Error: ${e.message}")
-                            }
-                        }
-                    } else {
-                        continuation.resume("")
+                if (!isDeployed(from)) {
+                    val pair: Pair<BigInteger, BigInteger>? = runBlocking {  getPair() }
+                    pair?.let {
+                        val ownerData = encodeSignatureData(pair.first, pair.second)
+                        initCode = encodeInitCode(
+                            factoryAddress = factoryAddress,
+                            owners = listOf(ownerData),
+                            nonce = nonceForUserOp
+                        )
                     }
                 }
-            }
 
-            sendTransaction.invoke(
-                proxy,
-                session,
-                from,
-                to,
-                value,
-                data,
-                nonceForUserOp.toString(),
-                gasPrices.maxFeePerGas.toString(),
-                gasPrices.maxPriorityFeePerGas.toString(),
-                callGasLimit.toString(),
-                initCode,
-                chainId,
-                receiver
-            )
-        } catch (e: Exception) {
-            e.printStackTrace()
-            continuation.resume("Error: ${e.message}")
+                // Create the UserOp
+                val userOp = UserOperation(
+                    sender = from,
+                    nonce = nonceForUserOp,
+                    initCode = initCode,
+                    callData = callData,
+                    // TODO: Implement actual gas estimation
+                    callGasLimit = callGasLimit,
+                    verificationGasLimit = verificationGasLimit,
+                    preVerificationGas = preVerificationGas,
+                    maxFeePerGas = gasPrices.maxFeePerGas,
+                    maxPriorityFeePerGas = gasPrices.maxPriorityFeePerGas,
+                    // TODO: Research and implement paymaster
+                    paymasterAndData = "",
+                    // Signature gets filled in later
+                    signature = ""
+                )
+
+                val receiver = object : ResultReceiver(Handler(Looper.getMainLooper())) {
+                    override fun onReceiveResult(resultCode: Int, resultData: Bundle?) {
+                        val result = resultData?.getString("result")
+                        if (result == DECLINE) {
+                            continuation.resume(DECLINE)
+                        } else if (result != null) {
+                            CoroutineScope(Dispatchers.IO).launch {
+                                println("Signature: $result")
+                                val signedUserOp = userOp.copy(signature = result)
+                                val out = sendUserOpToBundler(signedUserOp)
+                                // {"jsonrpc":"2.0","id":1,"result":"User OP hash"}
+                                try {
+                                    val jsonObject = JSONObject(out)
+                                    if (jsonObject.has("result")) {
+                                        continuation.resume(jsonObject.getString("result"))
+                                    } else {
+                                        continuation.resume("Error: ${jsonObject.getString("error")}")
+                                    }
+                                } catch (e: Exception) {
+                                    e.printStackTrace()
+                                    continuation.resume("Error: ${e.message}")
+                                }
+                            }
+                        } else {
+                            continuation.resume("")
+                        }
+                    }
+                }
+
+                sendTransaction.invoke(
+                    proxy,
+                    session,
+                    from,
+                    to,
+                    value,
+                    data,
+                    nonceForUserOp.toString(),
+                    gasPrices.maxFeePerGas.toString(),
+                    gasPrices.maxPriorityFeePerGas.toString(),
+                    callGasLimit.toString(),
+                    initCode,
+                    chainId,
+                    receiver
+                )
+            } catch (e: Exception) {
+                e.printStackTrace()
+                continuation.resume("Error: ${e.message}")
+            }
         }
     }
 
@@ -503,8 +505,11 @@ class WalletSDK(
         BigInteger(response.value.substring(2), 16)  // Added radix parameter 16 for hex
     }
 
-    suspend fun signMessage(message: String, chainId: Int, from: String, type: String): String =
-        suspendCancellableCoroutine { continuation ->
+    suspend fun signMessage(message: String, chainId: Int, type: String = "personal_sign"): String {
+        val from = getAddress()
+
+        return suspendCancellableCoroutine { continuation ->
+
             val receiver = object : ResultReceiver(Handler(Looper.getMainLooper())) {
                 override fun onReceiveResult(resultCode: Int, resultData: Bundle?) {
                     val result = resultData?.getString("result")
@@ -514,6 +519,7 @@ class WalletSDK(
 
             signMessage.invoke(proxy, session, message, chainId.toString(), from, type, receiver)
         }
+    }
 
     suspend fun getChainId(): Int = suspendCancellableCoroutine { continuation ->
         val receiver = object : ResultReceiver(Handler(Looper.getMainLooper())) {
