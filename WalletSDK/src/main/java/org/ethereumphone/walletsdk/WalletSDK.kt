@@ -503,9 +503,8 @@ class WalletSDK(
         BigInteger(response.value.substring(2), 16)  // Added radix parameter 16 for hex
     }
 
-    suspend fun signMessage(message: String, chainId: Int, from: String): String =
+    suspend fun signMessage(message: String, chainId: Int, from: String, type: String): String =
         suspendCancellableCoroutine { continuation ->
-            val type = "personal_sign"
             val receiver = object : ResultReceiver(Handler(Looper.getMainLooper())) {
                 override fun onReceiveResult(resultCode: Int, resultData: Bundle?) {
                     val result = resultData?.getString("result")
