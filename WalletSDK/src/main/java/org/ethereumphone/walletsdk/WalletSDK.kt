@@ -69,7 +69,10 @@ class WalletSDK(
     private val changeChainId = cls.declaredMethods.first { it.name == "changeChainId" }
     private val isWalletConnected = cls.declaredMethods.first { it.name == "isWalletConnected" }
 
+    private val getInitCode = cls.declaredMethods.first { it.name == "getInitCode" }
+
     private var address: String? = null
+    private var initCodeFromOS: String? = null
     private var proxy: Any? = null
     private lateinit var session: String
     private var bundlerRPC = bundlerRPCUrl
@@ -95,23 +98,8 @@ class WalletSDK(
             override fun onReceiveResult(resultCode: Int, resultData: Bundle?) {
                 val result = resultData?.getString("result")
                 if (result != null) {
-                    try {
-                        val realAddress = decodeECPublicKey(result)
-                        val (x, y) = getPublicKeyCoordinates(realAddress)
-                        val ownersEncoded = encodeSignatureData(x, y)
-                        CoroutineScope(Dispatchers.IO).launch {
-                            val locallyComputed = Create2Calculator.getAddress(listOf(ownersEncoded), BigInteger.ZERO)
-                            address = locallyComputed
-
-                            continuation.resume(locallyComputed)
-                        }
-                    } catch (
-                        e: Exception
-                    ) {
-                        e.printStackTrace()
-                        continuation.resume("")
-                    }
-
+                    address = result
+                    continuation.resume(result)
                 } else {
                     continuation.resume("")
                 }
@@ -306,15 +294,7 @@ class WalletSDK(
                 var initCode = ""
 
                 if (!isDeployed(from)) {
-                    val pair: Pair<BigInteger, BigInteger>? = runBlocking {  getPair() }
-                    pair?.let {
-                        val ownerData = encodeSignatureData(pair.first, pair.second)
-                        initCode = encodeInitCode(
-                            factoryAddress = factoryAddress,
-                            owners = listOf(ownerData),
-                            nonce = nonceForUserOp
-                        )
-                    }
+                    initCode = runBlocking { getInitCode() }
                 }
 
                 // Create the UserOp
@@ -384,6 +364,25 @@ class WalletSDK(
                 continuation.resume("Error: ${e.message}")
             }
         }
+    }
+
+    private suspend fun getInitCode(): String = suspendCancellableCoroutine { continuation ->
+        initCodeFromOS?.let {
+            continuation.resume(it)
+            return@suspendCancellableCoroutine
+        }
+        val receiver = object : ResultReceiver(Handler(Looper.getMainLooper())) {
+            override fun onReceiveResult(resultCode: Int, resultData: Bundle?) {
+                val result = resultData?.getString("result")
+                if (result != null) {
+                    initCodeFromOS = result
+                    continuation.resume(result)
+                } else {
+                    continuation.resume("")
+                }
+            }
+        }
+        getInitCode.invoke(proxy, session, receiver)
     }
 
     fun isDeployed(address: String): Boolean {
