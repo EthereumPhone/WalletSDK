@@ -536,6 +536,8 @@ class WalletSDK(
             web3jInstance = Web3j.build(HttpService(rpcEndpoint))
             bundlerRPC = mBundlerRPCUrl
 
+            println("Updated web3jInstance to $rpcEndpoint")
+
             val receiver = object : ResultReceiver(Handler(Looper.getMainLooper())) {
                 override fun onReceiveResult(resultCode: Int, resultData: Bundle?) {
                     val result = resultData?.getString("result")
