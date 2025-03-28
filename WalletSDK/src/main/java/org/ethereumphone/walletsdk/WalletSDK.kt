@@ -289,7 +289,7 @@ class WalletSDK(
 
                 val callGasLimit = callGas ?: BigInteger("1000000")
                 val verificationGasLimit = BigInteger("1000000")
-                val preVerificationGas = BigInteger("300000")
+                val preVerificationGas = BigInteger("600000")
 
                 var initCode = ""
 
