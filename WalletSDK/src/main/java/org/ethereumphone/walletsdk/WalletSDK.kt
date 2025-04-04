@@ -14,6 +14,7 @@ import com.google.gson.Gson
 import com.google.gson.JsonArray
 import com.google.gson.JsonObject
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.DEBUG_PROPERTY_NAME
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.launch
@@ -199,7 +200,7 @@ class WalletSDK(
         val encodedFunction = FunctionEncoder.encode(function)
 
         val response = try {
-             web3jInstance.ethCall(
+            web3jInstance.ethCall(
                 org.web3j.protocol.core.methods.request.Transaction.createEthCallTransaction(
                     null,
                     factoryAddress,
@@ -287,29 +288,44 @@ class WalletSDK(
 
                 val gasPrices = getGasPrice(bundlerRPCUrl = bundlerRPC)
 
-                val callGasLimit = callGas ?: BigInteger("1000000")
-                val verificationGasLimit = BigInteger("1000000")
-                val preVerificationGas = BigInteger("300000")
-
                 var initCode = ""
 
                 if (!isDeployed(from)) {
                     initCode = runBlocking { getInitCode() }
                 }
 
-                // Create the UserOp
+                // Create a UserOperation with zero gas limits for estimation
+                val estimationUserOp = UserOperation(
+                    sender = from,
+                    nonce = nonceForUserOp,
+                    initCode = initCode,
+                    callData = callData,
+                    callGasLimit = BigInteger.ZERO,
+                    verificationGasLimit = BigInteger.ZERO,
+                    preVerificationGas = BigInteger.ZERO,
+                    maxFeePerGas = gasPrices.maxFeePerGas,
+                    maxPriorityFeePerGas = gasPrices.maxPriorityFeePerGas,
+                    paymasterAndData = "",
+                    // Dummy signature for estimation
+                    signature = "0x00000000fffffffffffffffffffffffffffffff0000000000000000000000000000000007aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1c"
+                )
+
+                // Estimate gas limits
+                val gasEstimation = runBlocking {
+                    estimateUserOperationGas(estimationUserOp)
+                }
+
+                // Create the UserOp with estimated gas limits
                 val userOp = UserOperation(
                     sender = from,
                     nonce = nonceForUserOp,
                     initCode = initCode,
                     callData = callData,
-                    // TODO: Implement actual gas estimation
-                    callGasLimit = callGasLimit,
-                    verificationGasLimit = verificationGasLimit,
-                    preVerificationGas = preVerificationGas,
+                    callGasLimit = callGas ?: gasEstimation.callGasLimit,
+                    verificationGasLimit = gasEstimation.verificationGasLimit,
+                    preVerificationGas = gasEstimation.preVerificationGas,
                     maxFeePerGas = gasPrices.maxFeePerGas,
                     maxPriorityFeePerGas = gasPrices.maxPriorityFeePerGas,
-                    // TODO: Research and implement paymaster
                     paymasterAndData = "",
                     // Signature gets filled in later
                     signature = ""
@@ -323,7 +339,7 @@ class WalletSDK(
                         } else if (result != null) {
                             CoroutineScope(Dispatchers.IO).launch {
                                 println("Signature: $result")
-                                val signedUserOp = userOp.copy(signature = result)
+                                val signedUserOp = Gson().fromJson(result, UserOperation::class.java)
                                 val out = sendUserOpToBundler(signedUserOp)
                                 // {"jsonrpc":"2.0","id":1,"result":"User OP hash"}
                                 try {
@@ -347,15 +363,7 @@ class WalletSDK(
                 sendTransaction.invoke(
                     proxy,
                     session,
-                    from,
-                    to,
-                    value,
-                    data,
-                    nonceForUserOp.toString(),
-                    gasPrices.maxFeePerGas.toString(),
-                    gasPrices.maxPriorityFeePerGas.toString(),
-                    callGasLimit.toString(),
-                    initCode,
+                    Gson().toJson(userOp),
                     chainId,
                     receiver
                 )
@@ -363,6 +371,74 @@ class WalletSDK(
                 e.printStackTrace()
                 continuation.resume("Error: ${e.message}")
             }
+        }
+    }
+
+    /**
+     * Estimate gas for a user operation using the bundler RPC
+     */
+    suspend fun estimateUserOperationGas(userOp: UserOperation): GasEstimation = withContext(Dispatchers.IO) {
+        val client = OkHttpClient()
+
+        // Create the UserOperation JSON object
+        val userOpJson = JsonObject().apply {
+            addProperty("sender", userOp.sender)
+            addProperty("nonce", "0x" + userOp.nonce.toString(16))
+            addProperty("initCode", if (userOp.initCode.isEmpty()) "0x" else userOp.initCode)
+            addProperty("callData", if (userOp.callData.isEmpty()) "0x" else userOp.callData)
+            addProperty("callGasLimit", "0x" + userOp.callGasLimit.toString(16))
+            addProperty("verificationGasLimit", "0x" + userOp.verificationGasLimit.toString(16))
+            addProperty("preVerificationGas", "0x" + userOp.preVerificationGas.toString(16))
+            addProperty("maxFeePerGas", "0x" + userOp.maxFeePerGas.toString(16))
+            addProperty("maxPriorityFeePerGas", "0x" + userOp.maxPriorityFeePerGas.toString(16))
+            addProperty("paymasterAndData", if (userOp.paymasterAndData.isEmpty()) "0x" else userOp.paymasterAndData)
+            addProperty("signature", userOp.signature)
+        }
+
+        // Create the params array
+        val paramsArray = JsonArray().apply {
+            add(userOpJson)
+            add(entryPointAddress) // EntryPoint contract address
+        }
+
+        // Create the complete RPC request
+        val rpcRequest = JsonObject().apply {
+            addProperty("jsonrpc", "2.0")
+            addProperty("method", "eth_estimateUserOperationGas")
+            add("params", paramsArray)
+            addProperty("id", 1)
+        }
+
+        // Create and execute the HTTP request
+        val request = Request.Builder()
+            .url(bundlerRPC)
+            .post(rpcRequest.toString().toRequestBody("application/json".toMediaType()))
+            .build()
+
+        client.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) {
+                throw Exception("Failed to estimate UserOperation gas: ${response.body?.string()}")
+            }
+
+            val responseBody = response.body?.string() ?: throw Exception("Empty response from bundler")
+            val jsonResponse = Gson().fromJson(responseBody, JsonObject::class.java)
+
+            if (jsonResponse.has("error")) {
+                val error = jsonResponse.getAsJsonObject("error")
+                return@withContext GasEstimation(
+                    preVerificationGas = BigInteger("100000"),
+                    verificationGasLimit = BigInteger("500000"),
+                    callGasLimit = BigInteger("500000")
+                )
+            }
+
+            val result = jsonResponse.getAsJsonObject("result")
+
+            return@withContext GasEstimation(
+                preVerificationGas = BigInteger(result.get("preVerificationGas").asString.substring(2), 16),
+                verificationGasLimit = BigInteger(result.get("verificationGasLimit").asString.substring(2), 16),
+                callGasLimit = BigInteger(result.get("callGasLimit").asString.substring(2), 16)
+            )
         }
     }
 
@@ -414,7 +490,7 @@ class WalletSDK(
         // Create the params array
         val paramsArray = JsonArray().apply {
             add(userOpJson)
-            add("0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789") // EntryPoint contract address
+            add(entryPointAddress) // EntryPoint contract address
         }
 
         // Create the complete RPC request
@@ -612,5 +688,11 @@ class WalletSDK(
     data class GasPrice(
         val maxFeePerGas: BigInteger,
         val maxPriorityFeePerGas: BigInteger
+    )
+
+    data class GasEstimation(
+        val preVerificationGas: BigInteger,
+        val verificationGasLimit: BigInteger,
+        val callGasLimit: BigInteger
     )
 }
