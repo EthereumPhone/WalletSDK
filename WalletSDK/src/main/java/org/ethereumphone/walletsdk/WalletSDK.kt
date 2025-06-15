@@ -10,6 +10,8 @@ import android.util.Base64
 import com.esaulpaugh.headlong.abi.Tuple
 import com.esaulpaugh.headlong.abi.TupleType
 import com.esaulpaugh.headlong.abi.TypeFactory
+import com.esaulpaugh.headlong.abi.Single
+import com.esaulpaugh.headlong.abi.Address as HeadlongAddress
 import com.google.gson.Gson
 import com.google.gson.JsonArray
 import com.google.gson.JsonObject
@@ -49,7 +51,9 @@ import java.security.interfaces.ECPublicKey
 import java.security.spec.InvalidKeySpecException
 import java.security.spec.X509EncodedKeySpec
 import kotlin.coroutines.resume
+import org.web3j.abi.datatypes.DynamicStruct
 
+typealias UserOpSubmitter = suspend (userOp: WalletSDK.UserOperation, bundlerRpcUrl: String?) -> String
 
 @SuppressLint("WrongConstant")
 class WalletSDK(
@@ -75,7 +79,7 @@ class WalletSDK(
     private var address: String? = null
     private var initCodeFromOS: String? = null
     private var proxy: Any? = null
-    private lateinit var session: String
+    private var session: String
     private var bundlerRPC = bundlerRPCUrl
 
     init {
@@ -262,6 +266,7 @@ class WalletSDK(
         }
     }
 
+    // Single transaction variant
     suspend fun sendTransaction(
         to: String,
         value: String,
@@ -269,32 +274,28 @@ class WalletSDK(
         callGas: BigInteger?,
         chainId: Int? = null,
         rpcEndpoint: String? = null,
+        bundlerRPC: String? = null,
+        submitUserOpToBundler: UserOpSubmitter? = null
     ): String {
         val from = getAddress()
         return suspendCancellableCoroutine { continuation ->
             try {
-                val function = org.web3j.abi.datatypes.Function(
-                    "execute",  // function name
-                    listOf(
-                        Address(to),  // to
-                        Uint256(BigInteger(value)),      // value
-                        DynamicBytes(Numeric.hexStringToByteArray(data))  // data (empty for simple ETH transfer)
-                    ),
-                    emptyList()  // output parameters
+                val toAddr = HeadlongAddress.wrap(to)
+                val function = com.esaulpaugh.headlong.abi.Function.parse("execute(address,uint256,bytes)", "()")
+                val encodedFunction = function.encodeCall(
+                    Tuple.of(toAddr, BigInteger(value), Numeric.hexStringToByteArray(data))
                 )
-                val callData = FunctionEncoder.encode(function)
+                val callData = Numeric.toHexString(encodedFunction.array())
 
                 val nonceForUserOp = runBlocking { getNonce(from) }
-
-                val gasPrices = getGasPrice(bundlerRPCUrl = bundlerRPC)
+                val finalBundlerRPC = bundlerRPC ?: this.bundlerRPC
+                val gasPrices = getGasPrice(bundlerRPCUrl = finalBundlerRPC)
 
                 var initCode = ""
-
-                if (!isDeployed(from)) {
+                if (!isDeployed(from, rpcEndpoint)) {
                     initCode = runBlocking { getInitCode() }
                 }
 
-                // Create a UserOperation with zero gas limits for estimation
                 val estimationUserOp = UserOperation(
                     sender = from,
                     nonce = nonceForUserOp,
@@ -310,12 +311,10 @@ class WalletSDK(
                     signature = "0x00000000fffffffffffffffffffffffffffffff0000000000000000000000000000000007aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1c"
                 )
 
-                // Estimate gas limits
                 val gasEstimation = runBlocking {
-                    estimateUserOperationGas(estimationUserOp)
+                    estimateUserOperationGas(estimationUserOp, finalBundlerRPC)
                 }
 
-                // Create the UserOp with estimated gas limits
                 val userOp = UserOperation(
                     sender = from,
                     nonce = nonceForUserOp,
@@ -327,8 +326,7 @@ class WalletSDK(
                     maxFeePerGas = gasPrices.maxFeePerGas,
                     maxPriorityFeePerGas = gasPrices.maxPriorityFeePerGas,
                     paymasterAndData = "",
-                    // Signature gets filled in later
-                    signature = ""
+                    signature = "0x"
                 )
 
                 val receiver = object : ResultReceiver(Handler(Looper.getMainLooper())) {
@@ -338,10 +336,119 @@ class WalletSDK(
                             continuation.resume(DECLINE)
                         } else if (result != null) {
                             CoroutineScope(Dispatchers.IO).launch {
-                                println("Signature: $result")
                                 val signedUserOp = Gson().fromJson(result, UserOperation::class.java)
-                                val out = sendUserOpToBundler(signedUserOp)
-                                // {"jsonrpc":"2.0","id":1,"result":"User OP hash"}
+                                val out = if (submitUserOpToBundler != null) {
+                                    submitUserOpToBundler(signedUserOp, finalBundlerRPC)
+                                } else {
+                                    sendUserOpToBundler(signedUserOp, finalBundlerRPC)
+                                }
+                                try {
+                                    val jsonObject = JSONObject(out)
+                                    if (jsonObject.has("result")) {
+                                        continuation.resume(jsonObject.getString("result"))
+                                    } else {
+                                        continuation.resume("Error: ${jsonObject.getString("error")}")
+                                    }
+                                } catch (e: Exception) {
+                                    e.printStackTrace()
+                                    continuation.resume("Error: ${e.message}")
+                                }
+                            }
+                        } else {
+                            continuation.resume("")
+                        }
+                    }
+                }
+
+                sendTransaction.invoke(
+                    proxy,
+                    session,
+                    Gson().toJson(userOp),
+                    chainId,
+                    receiver
+                )
+            } catch (e: Exception) {
+                e.printStackTrace()
+                continuation.resume("Error: ${e.message}")
+            }
+        }
+    }
+
+    // Overloaded version for batched calls
+    suspend fun sendTransaction(
+        txs: Array<TxParams>,
+        callGas: BigInteger?,
+        chainId: Int? = null,
+        rpcEndpoint: String? = null,
+        bundlerRPC: String? = null,
+        submitUserOpToBundler: UserOpSubmitter? = null
+    ): String {
+        val from = getAddress()
+        return suspendCancellableCoroutine { continuation ->
+            try {
+                val callTuples = txs.map { tx ->
+                    val addr = HeadlongAddress.wrap(tx.to)
+                    Tuple.of(addr, BigInteger(tx.value), Numeric.hexStringToByteArray(tx.data))
+                }.toTypedArray()
+
+                val function = com.esaulpaugh.headlong.abi.Function.parse("executeBatch((address,uint256,bytes)[])", "()")
+                val encodedFunction = function.encodeCall(Single.of(callTuples))
+                val callData = Numeric.toHexString(encodedFunction.array())
+
+                val nonceForUserOp = runBlocking { getNonce(from) }
+                val finalBundlerRPC = bundlerRPC ?: this.bundlerRPC
+                val gasPrices = getGasPrice(bundlerRPCUrl = finalBundlerRPC)
+
+                var initCode = ""
+                if (!isDeployed(from, rpcEndpoint)) {
+                    initCode = runBlocking { getInitCode() }
+                }
+
+                val estimationUserOp = UserOperation(
+                    sender = from,
+                    nonce = nonceForUserOp,
+                    initCode = initCode,
+                    callData = callData,
+                    callGasLimit = BigInteger("100000"),
+                    verificationGasLimit = BigInteger("100000"),
+                    preVerificationGas = BigInteger("100000"),
+                    maxFeePerGas = gasPrices.maxFeePerGas,
+                    maxPriorityFeePerGas = gasPrices.maxPriorityFeePerGas,
+                    paymasterAndData = "",
+                    signature = "0x"
+                )
+
+                val gasEstimation = runBlocking {
+                    estimateUserOperationGas(estimationUserOp, finalBundlerRPC)
+                }
+
+                val userOp = UserOperation(
+                    sender = from,
+                    nonce = nonceForUserOp,
+                    initCode = initCode,
+                    callData = callData,
+                    callGasLimit = callGas ?: gasEstimation.callGasLimit,
+                    verificationGasLimit = gasEstimation.verificationGasLimit,
+                    preVerificationGas = gasEstimation.preVerificationGas,
+                    maxFeePerGas = gasPrices.maxFeePerGas,
+                    maxPriorityFeePerGas = gasPrices.maxPriorityFeePerGas,
+                    paymasterAndData = "",
+                    signature = "0x"
+                )
+
+                val receiver = object : ResultReceiver(Handler(Looper.getMainLooper())) {
+                    override fun onReceiveResult(resultCode: Int, resultData: Bundle?) {
+                        val result = resultData?.getString("result")
+                        if (result == DECLINE) {
+                            continuation.resume(DECLINE)
+                        } else if (result != null) {
+                            CoroutineScope(Dispatchers.IO).launch {
+                                val signedUserOp = Gson().fromJson(result, UserOperation::class.java)
+                                val out = if (submitUserOpToBundler != null) {
+                                    submitUserOpToBundler(signedUserOp, finalBundlerRPC)
+                                } else {
+                                    sendUserOpToBundler(signedUserOp, finalBundlerRPC)
+                                }
                                 try {
                                     val jsonObject = JSONObject(out)
                                     if (jsonObject.has("result")) {
@@ -377,8 +484,9 @@ class WalletSDK(
     /**
      * Estimate gas for a user operation using the bundler RPC
      */
-    suspend fun estimateUserOperationGas(userOp: UserOperation): GasEstimation = withContext(Dispatchers.IO) {
+    suspend fun estimateUserOperationGas(userOp: UserOperation, bundlerRPCUrl: String? = null): GasEstimation = withContext(Dispatchers.IO) {
         val client = OkHttpClient()
+        val rpcUrl = bundlerRPCUrl ?: bundlerRPC
 
         // Create the UserOperation JSON object
         val userOpJson = JsonObject().apply {
@@ -411,7 +519,7 @@ class WalletSDK(
 
         // Create and execute the HTTP request
         val request = Request.Builder()
-            .url(bundlerRPC)
+            .url(rpcUrl)
             .post(rpcRequest.toString().toRequestBody("application/json".toMediaType()))
             .build()
 
@@ -425,6 +533,7 @@ class WalletSDK(
 
             if (jsonResponse.has("error")) {
                 val error = jsonResponse.getAsJsonObject("error")
+                println("Error estimating gas: ${error.toString()}")
                 return@withContext GasEstimation(
                     preVerificationGas = BigInteger("100000"),
                     verificationGasLimit = BigInteger("500000"),
@@ -461,16 +570,23 @@ class WalletSDK(
         getInitCode.invoke(proxy, session, receiver)
     }
 
-    fun isDeployed(address: String): Boolean {
-        val code = web3jInstance.ethGetCode(address, DefaultBlockParameterName.LATEST).send()
+    fun isDeployed(address: String, rpcEndpoint: String? = null): Boolean {
+        val web3j = if (rpcEndpoint != null) {
+            Web3j.build(HttpService(rpcEndpoint))
+        } else {
+            this.web3jInstance
+        }
+        val code = web3j.ethGetCode(address, DefaultBlockParameterName.LATEST).send()
 
         return code.code.length > 2
     }
 
     fun sendUserOpToBundler(
-        userOp: UserOperation
+        userOp: UserOperation,
+        bundlerRPCUrl: String? = null
     ): String {
         val client = OkHttpClient()
+        val rpcUrl = bundlerRPCUrl ?: bundlerRPC
 
         // Create the UserOperation JSON object
         val userOpJson = JsonObject().apply {
@@ -503,7 +619,7 @@ class WalletSDK(
 
         // Create and execute the HTTP request
         val request = Request.Builder()
-            .url(bundlerRPC)
+            .url(rpcUrl)
             .post(rpcRequest.toString().toRequestBody("application/json".toMediaType()))
             .build()
 
@@ -695,4 +811,16 @@ class WalletSDK(
         val verificationGasLimit: BigInteger,
         val callGasLimit: BigInteger
     )
+
+    data class TxParams(
+        val to: String,
+        val value: String,
+        val data: String
+    )
+
+    class CallStruct(
+        target: Address,
+        value: Uint256,
+        data: DynamicBytes
+    ) : DynamicStruct(target, value, data)
 }
