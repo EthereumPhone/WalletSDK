@@ -95,7 +95,7 @@ CoroutineScope(Dispatchers.IO).launch {
     val userOpHashOrError = wallet.sendTransaction(
         to = "0x3a4e6ed8b0f02bfbfaa3c6506af2db939ea5798c",
         value = "1000000000000000000", // wei
-        data = "0x",
+        data = "0",
         callGas = null,                // null → auto-estimate via bundler
         chainId = 1,
         rpcEndpoint = "https://rpc.ankr.com/eth"
@@ -116,7 +116,7 @@ CoroutineScope(Dispatchers.IO).launch {
         WalletSDK.TxParams(
             to = "0x...",
             value = "12345",
-            data = "0x"
+            data = "0"
         )
     )
     val userOpHash = wallet.sendTransaction(
