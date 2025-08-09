@@ -39,7 +39,7 @@ implementation 'com.github.EthereumPhone:WalletSDK:0.1.0'
 
 ### Configure bundler RPC URL
 
-WalletSDK requires a bundler RPC URL for ERC-4337 operations. Example using `local.properties` → `BuildConfig`:
+WalletSDK requires a bundler RPC URL. Best compatibility is reached with a pimlico URL, which you can just put here for ERC-4337 operations. Example using `local.properties` → `BuildConfig`:
 
 ```properties
 # local.properties (do not commit secrets)
