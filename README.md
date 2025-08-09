@@ -1,10 +1,12 @@
-# WalletSDK
+## WalletSDK
 
-This is an SDK to use the system-level wallet on ethOS.
+SDK for interacting with the ethOS system wallet using Account Abstraction (ERC-4337). Supports batched transactions, automatic gas estimation via a bundler, message signing, chain switching, and address utilities.
 
-### How to add the WalletSDK into your app
+Minimum Android SDK: 27
 
-First, go into your `settings.gradle` file and add the line `maven { url 'https://jitpack.io' }` to the `pluginManagement` and the `dependencyResolutionManagement` section like this:
+### Install
+
+Add JitPack to `settings.gradle` in both `pluginManagement` and `dependencyResolutionManagement`:
 
 ```groovy
 pluginManagement {
@@ -25,49 +27,127 @@ dependencyResolutionManagement {
 }
 ```
 
-Then go to your module-level `build.gradle` file and add the following line to the `dependencies` section:
+Add dependencies in your app/module `build.gradle`:
 
 ```groovy
-// Web3j needed for the WalletSDK
-implementation 'org.web3j:core:4.8.8-android'
-implementation 'com.github.EthereumPhone:WalletSDK:0.0.10'
+// Required by WalletSDK (library declares web3j as compileOnly)
+implementation 'org.web3j:core:4.9.4'
+
+// WalletSDK
+implementation 'com.github.EthereumPhone:WalletSDK:0.1.0'
 ```
 
-### How to initialize SDK
+### Configure bundler RPC URL
+
+WalletSDK requires a bundler RPC URL for ERC-4337 operations. Example using `local.properties` → `BuildConfig`:
+
+```properties
+# local.properties (do not commit secrets)
+BUNDLER_RPC_URL=https://your-bundler.example
+```
+
+```groovy
+// app/build.gradle
+android {
+  defaultConfig {
+    Properties props = new Properties()
+    props.load(project.rootProject.file('local.properties').newDataInputStream())
+    buildConfigField 'String', 'BUNDLER_RPC_URL', '"' + props.getProperty('BUNDLER_RPC_URL') + '"'
+  }
+}
+```
+
+### Initialize
 
 ```kotlin
-// You just need to supply a context
-val wallet = WalletSDK(context)
-
-// You can also supply your own web3j instance, like this:
-
-val web3j = Web3j.build(HttpService("https://rpc.ankr.com/eth"))
 val wallet = WalletSDK(
     context = context,
-    web3RPC = web3j
+    bundlerRPCUrl = BuildConfig.BUNDLER_RPC_URL,
+    // optional: override default web3 provider used for reads (eth_call, code, etc.)
+    web3jInstance = Web3j.build(HttpService("https://base.llamarpc.com"))
 )
 ```
 
-### How to sign a message
+### Get address
 
 ```kotlin
-// How to sign Message
 CoroutineScope(Dispatchers.IO).launch {
-    val result = wallet.signMessage(
-        message = "Message to sign"
+    val address = wallet.getAddress()
+}
+```
+
+### Sign message
+
+```kotlin
+CoroutineScope(Dispatchers.IO).launch {
+    val signature = wallet.signMessage(
+        message = "Message to sign",
+        chainId = 1, // required
+        // type = "personal_sign" // optional (default)
     )
-    println(result)
 }
 ```
 
-### How to send a Transaction
+### Send transaction (single)
 
 ```kotlin
 CoroutineScope(Dispatchers.IO).launch {
-    val result = wallet.sendTransaction(
-        to = "0x3a4e6ed8b0f02bfbfaa3c6506af2db939ea5798c", // mhaas.eth
-        value = "1000000000000000000", // 1 eth in wei
-        data = "")
-    println(result)
+    val userOpHashOrError = wallet.sendTransaction(
+        to = "0x3a4e6ed8b0f02bfbfaa3c6506af2db939ea5798c",
+        value = "1000000000000000000", // wei
+        data = "0x",
+        callGas = null,                // null → auto-estimate via bundler
+        chainId = 1,
+        rpcEndpoint = "https://rpc.ankr.com/eth"
+    )
 }
 ```
+
+### Send transaction (batch)
+
+```kotlin
+CoroutineScope(Dispatchers.IO).launch {
+    val txs = listOf(
+        WalletSDK.TxParams(
+            to = "0x...",
+            value = "0",
+            data = "0x..."
+        ),
+        WalletSDK.TxParams(
+            to = "0x...",
+            value = "12345",
+            data = "0x"
+        )
+    )
+    val userOpHash = wallet.sendTransaction(
+        txParamsList = txs,
+        callGas = null,
+        chainId = 1,
+        rpcEndpoint = "https://rpc.ankr.com/eth"
+    )
+}
+```
+
+### Chain management
+
+```kotlin
+CoroutineScope(Dispatchers.IO).launch {
+    val current = wallet.getChainId()
+    val result = wallet.changeChain(
+        chainId = 8453,
+        rpcEndpoint = "https://base.llamarpc.com",
+        mBundlerRPCUrl = "https://your-bundler.for-base"
+    )
+}
+```
+
+### Other utilities
+
+- `isWalletConnected(): Boolean`
+- `switchAccount(index: Int): String`
+- `getNonce(senderAddress: String, rpcEndpoint: String?): BigInteger`
+- `getPrecomputedAddress(pubKeyX: BigInteger, pubKeyY: BigInteger, salt: BigInteger = BigInteger.ZERO): String`
+
+Notes
+- Works on ethOS devices with the system wallet service available. Construction will throw `NoSysWalletException` if the system service is unavailable.
+- `sendTransaction` returns a user operation hash on success, or the string `decline` if the user rejected the request.
