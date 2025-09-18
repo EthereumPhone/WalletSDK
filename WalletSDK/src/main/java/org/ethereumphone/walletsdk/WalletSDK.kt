@@ -378,7 +378,7 @@ class WalletSDK(
                     initCode = initCode,
                     callData = callData,
                     callGasLimit = callGas ?: gasEstimation.callGasLimit,
-                    verificationGasLimit = gasEstimation.verificationGasLimit,
+                    verificationGasLimit = BigInteger("400000"),
                     preVerificationGas = gasEstimation.preVerificationGas,
                     maxFeePerGas = gasPrices.maxFeePerGas,
                     maxPriorityFeePerGas = gasPrices.maxPriorityFeePerGas,
