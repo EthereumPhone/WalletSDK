@@ -420,10 +420,14 @@ class WalletSDK(
                     }
                 }
 
+                val finalUnsignedUserOp = Gson().toJson(userOp)
+
+                println("finalUnsignedUserOp: $finalUnsignedUserOp")
+
                 sendTransaction.invoke(
                     proxy,
                     session,
-                    Gson().toJson(userOp),
+                    finalUnsignedUserOp,
                     chainId,
                     receiver
                 )
