@@ -290,12 +290,14 @@ class WalletSDK(
         callGas: BigInteger?,
         chainId: Int? = null,
         rpcEndpoint: String? = null,
+        gasProvider: (suspend (UserOperation) -> GasEstimation)? = null,
     ): String {
         return sendTransaction(
             listOf(TxParams(to, value, data)),
             callGas,
             chainId,
-            rpcEndpoint
+            rpcEndpoint,
+            gasProvider = gasProvider
         )
     }
 
@@ -305,6 +307,9 @@ class WalletSDK(
      * @param callGas Gas limit for the call
      * @param chainId Chain ID for the transaction
      * @param rpcEndpoint RPC endpoint to use (optional)
+     * @param bundlerRPC Bundler RPC endpoint to use
+     * @param submitUserOpCustom Custom function to submit UserOperation
+     * @param gasProvider Custom function to provide gas estimation
      * @return Transaction hash or error message
      */
     suspend fun sendTransaction(
@@ -314,6 +319,7 @@ class WalletSDK(
         rpcEndpoint: String? = null,
         bundlerRPC: String = this.bundlerRPC,
         submitUserOpCustom: ((UserOperation) -> String)? = null,
+        gasProvider: (suspend (UserOperation) -> GasEstimation)? = null,
     ): String {
         val from = getAddress()
         rpcEndpoint?.let {
@@ -366,9 +372,13 @@ class WalletSDK(
                     signature = "0x0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000004000000000000000000000000000000000000000000000000000000000000001c0000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000000c000000000000000000000000000000000000000000000000000000000000001200000000000000000000000000000000000000000000000000000000000000017000000000000000000000000000000000000000000000000000000000000000190dcd684fb36d42ddd1f70dd6bca4c32be4306525e3bdeacd1dc597a1ad9c2087a92090fb86fa25180b288520c593cbad2d38893e52e17142375fd4885b5cca600000000000000000000000000000000000000000000000000000000000000210000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000517b2274797065223a22776562617574686e2e676574222c226368616c6c656e6765223a223170776c4c6f74743651515549614e4e7779505f41507058514641397153776c4e4d34673944365a777959227d000000000000000000000000000000"
                 )
 
-                // Estimate gas limits
+                // Estimate gas limits using custom provider or default method
                 val gasEstimation = runBlocking {
-                    estimateUserOperationGas(estimationUserOp)
+                    if (gasProvider != null) {
+                        gasProvider(estimationUserOp)
+                    } else {
+                        estimateUserOperationGas(estimationUserOp)
+                    }
                 }
 
                 // Create the UserOp with estimated gas limits
