@@ -48,6 +48,7 @@ import java.security.NoSuchAlgorithmException
 import java.security.interfaces.ECPublicKey
 import java.security.spec.InvalidKeySpecException
 import java.security.spec.X509EncodedKeySpec
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.resume
 import org.web3j.abi.datatypes.DynamicStruct
 
@@ -96,17 +97,22 @@ class WalletSDK(
             continuation.resume(it)
             return@suspendCancellableCoroutine
         }
+        val isCompleted = AtomicBoolean(false)
         val receiver = object : ResultReceiver(Handler(Looper.getMainLooper())) {
             override fun onReceiveResult(resultCode: Int, resultData: Bundle?) {
-                val result = resultData?.getString("result")
-                if (result != null) {
-                    address = result
-                    continuation.resume(result)
-                } else {
-                    continuation.resume("")
+                if (isCompleted.compareAndSet(false, true)) {
+                    val result = resultData?.getString("result")
+                    if (result != null) {
+                        address = result
+                        continuation.resume(result)
+                    } else {
+                        continuation.resume("")
+                    }
                 }
             }
         }
+
+        continuation.invokeOnCancellation { isCompleted.set(true) }
 
         getAddress.invoke(proxy, session, receiver)
     }
@@ -133,26 +139,29 @@ class WalletSDK(
     }
 
     suspend fun getPair(): Pair<BigInteger, BigInteger>? = suspendCancellableCoroutine { continuation ->
+        val isCompleted = AtomicBoolean(false)
         val receiver = object : ResultReceiver(Handler(Looper.getMainLooper())) {
             override fun onReceiveResult(resultCode: Int, resultData: Bundle?) {
-                val result = resultData?.getString("result")
-                if (result != null) {
-                    try {
-                        val realAddress = decodeECPublicKey(result)
-                        continuation.resume(getPublicKeyCoordinates(realAddress))
-                    } catch (
-                        e: Exception
-                    ) {
-                        e.printStackTrace()
+                if (isCompleted.compareAndSet(false, true)) {
+                    val result = resultData?.getString("result")
+                    if (result != null) {
+                        try {
+                            val realAddress = decodeECPublicKey(result)
+                            continuation.resume(getPublicKeyCoordinates(realAddress))
+                        } catch (
+                            e: Exception
+                        ) {
+                            e.printStackTrace()
+                            continuation.resume(null)
+                        }
+                    } else {
                         continuation.resume(null)
                     }
-
-                } else {
-                    continuation.resume(null)
                 }
             }
         }
 
+        continuation.invokeOnCancellation { isCompleted.set(true) }
         getAddress.invoke(proxy, session, receiver)
     }
 
@@ -326,6 +335,7 @@ class WalletSDK(
             web3jInstance = Web3j.build(HttpService(it))
         }
         return suspendCancellableCoroutine { continuation ->
+            val isCompleted = AtomicBoolean(false)
             try {
                 // Build the list of Call structs expected by `executeBatch`
                 val calls = txParamsList.map { tx ->
@@ -401,7 +411,9 @@ class WalletSDK(
                     override fun onReceiveResult(resultCode: Int, resultData: Bundle?) {
                         val result = resultData?.getString("result")
                         if (result == DECLINE) {
-                            continuation.resume(DECLINE)
+                            if (isCompleted.compareAndSet(false, true)) {
+                                continuation.resume(DECLINE)
+                            }
                         } else if (result != null) {
                             CoroutineScope(Dispatchers.IO).launch {
                                 println("Signature: $result")
@@ -415,21 +427,30 @@ class WalletSDK(
                                 try {
                                     val jsonObject = JSONObject(out)
                                     if (jsonObject.has("result")) {
-                                        continuation.resume(jsonObject.getString("result"))
+                                        if (isCompleted.compareAndSet(false, true)) {
+                                            continuation.resume(jsonObject.getString("result"))
+                                        }
                                     } else {
-                                        continuation.resume("Error: ${jsonObject.getString("error")}")
+                                        if (isCompleted.compareAndSet(false, true)) {
+                                            continuation.resume("Error: ${jsonObject.getString("error")}")
+                                        }
                                     }
                                 } catch (e: Exception) {
                                     e.printStackTrace()
-                                    continuation.resume("Error: ${e.message}")
+                                    if (isCompleted.compareAndSet(false, true)) {
+                                        continuation.resume("Error: ${e.message}")
+                                    }
                                 }
                             }
                         } else {
-                            continuation.resume("")
+                            if (isCompleted.compareAndSet(false, true)) {
+                                continuation.resume("")
+                            }
                         }
                     }
                 }
 
+                continuation.invokeOnCancellation { isCompleted.set(true) }
                 val finalUnsignedUserOp = Gson().toJson(userOp)
 
                 println("finalUnsignedUserOp: $finalUnsignedUserOp")
@@ -443,7 +464,9 @@ class WalletSDK(
                 )
             } catch (e: Exception) {
                 e.printStackTrace()
-                continuation.resume("Error: ${e.message}")
+                if (isCompleted.compareAndSet(false, true)) {
+                    continuation.resume("Error: ${e.message}")
+                }
             }
         }
     }
@@ -521,17 +544,21 @@ class WalletSDK(
             continuation.resume(it)
             return@suspendCancellableCoroutine
         }
+        val isCompleted = AtomicBoolean(false)
         val receiver = object : ResultReceiver(Handler(Looper.getMainLooper())) {
             override fun onReceiveResult(resultCode: Int, resultData: Bundle?) {
-                val result = resultData?.getString("result")
-                if (result != null) {
-                    initCodeFromOS = result
-                    continuation.resume(result)
-                } else {
-                    continuation.resume("")
+                if (isCompleted.compareAndSet(false, true)) {
+                    val result = resultData?.getString("result")
+                    if (result != null) {
+                        initCodeFromOS = result
+                        continuation.resume(result)
+                    } else {
+                        continuation.resume("")
+                    }
                 }
             }
         }
+        continuation.invokeOnCancellation { isCompleted.set(true) }
         getInitCode.invoke(proxy, session, receiver)
     }
 
@@ -662,26 +689,34 @@ class WalletSDK(
         val from = getAddress()
 
         return suspendCancellableCoroutine { continuation ->
+            val isCompleted = AtomicBoolean(false)
 
             val receiver = object : ResultReceiver(Handler(Looper.getMainLooper())) {
                 override fun onReceiveResult(resultCode: Int, resultData: Bundle?) {
-                    val result = resultData?.getString("result")
-                    continuation.resume(result ?: "")
+                    if (isCompleted.compareAndSet(false, true)) {
+                        val result = resultData?.getString("result")
+                        continuation.resume(result ?: "")
+                    }
                 }
             }
 
+            continuation.invokeOnCancellation { isCompleted.set(true) }
             signMessage.invoke(proxy, session, message, chainId.toString(), from, type, receiver)
         }
     }
 
     suspend fun getChainId(): Int = suspendCancellableCoroutine { continuation ->
+        val isCompleted = AtomicBoolean(false)
         val receiver = object : ResultReceiver(Handler(Looper.getMainLooper())) {
             override fun onReceiveResult(resultCode: Int, resultData: Bundle?) {
-                val result = resultData?.getString("result")
-                continuation.resume(result?.toIntOrNull() ?: 1)
+                if (isCompleted.compareAndSet(false, true)) {
+                    val result = resultData?.getString("result")
+                    continuation.resume(result?.toIntOrNull() ?: 1)
+                }
             }
         }
 
+        continuation.invokeOnCancellation { isCompleted.set(true) }
         getChainId.invoke(proxy, session, receiver)
     }
 
@@ -692,13 +727,17 @@ class WalletSDK(
 
             println("Updated web3jInstance to $rpcEndpoint")
 
+            val isCompleted = AtomicBoolean(false)
             val receiver = object : ResultReceiver(Handler(Looper.getMainLooper())) {
                 override fun onReceiveResult(resultCode: Int, resultData: Bundle?) {
-                    val result = resultData?.getString("result")
-                    continuation.resume(result ?: "")
+                    if (isCompleted.compareAndSet(false, true)) {
+                        val result = resultData?.getString("result")
+                        continuation.resume(result ?: "")
+                    }
                 }
             }
 
+            continuation.invokeOnCancellation { isCompleted.set(true) }
             changeChainId.invoke(proxy, session, chainId, receiver)
         }
 
