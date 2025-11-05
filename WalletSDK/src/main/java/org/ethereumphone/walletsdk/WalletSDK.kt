@@ -302,6 +302,87 @@ class WalletSDK(
     }
 
     /**
+     * Send a transaction using a pre-built UserOperation
+     * @param userOp The UserOperation to send (signature will be replaced)
+     * @param chainId Chain ID for the transaction
+     * @param rpcEndpoint RPC endpoint to use (optional)
+     * @param gasProvider Custom function to provide gas estimation (optional)
+     * @return UserOp hash or error message
+     */
+    suspend fun sendTransaction(
+        userOp: UserOperation,
+        chainId: Int? = 1,
+        rpcEndpoint: String? = null,
+        gasProvider: (suspend (UserOperation) -> GasEstimation)? = null,
+    ): String {
+        rpcEndpoint?.let {
+            web3jInstance = Web3j.build(HttpService(it))
+        }
+        
+        return suspendCancellableCoroutine { continuation ->
+            try {
+                // If gasProvider is provided, re-estimate gas limits
+                val finalUserOp = if (gasProvider != null) {
+                    runBlocking {
+                        val gasEstimation = gasProvider(userOp)
+                        userOp.copy(
+                            callGasLimit = gasEstimation.callGasLimit,
+                            verificationGasLimit = gasEstimation.verificationGasLimit,
+                            preVerificationGas = gasEstimation.preVerificationGas
+                        )
+                    }
+                } else {
+                    userOp
+                }
+                
+                val receiver = object : ResultReceiver(Handler(Looper.getMainLooper())) {
+                    override fun onReceiveResult(resultCode: Int, resultData: Bundle?) {
+                        val result = resultData?.getString("result")
+                        if (result == DECLINE) {
+                            continuation.resume(DECLINE)
+                        } else if (result != null) {
+                            CoroutineScope(Dispatchers.IO).launch {
+                                println("Signature: $result")
+                                val signedUserOp = Gson().fromJson(result, UserOperation::class.java)
+                                val out = sendUserOpToBundler(signedUserOp)
+                                // {"jsonrpc":"2.0","id":1,"result":"User OP hash"}
+                                try {
+                                    val jsonObject = JSONObject(out)
+                                    if (jsonObject.has("result")) {
+                                        continuation.resume(jsonObject.getString("result"))
+                                    } else {
+                                        continuation.resume("Error: ${jsonObject.getString("error")}")
+                                    }
+                                } catch (e: Exception) {
+                                    e.printStackTrace()
+                                    continuation.resume("Error: ${e.message}")
+                                }
+                            }
+                        } else {
+                            continuation.resume("")
+                        }
+                    }
+                }
+
+                val finalUnsignedUserOp = Gson().toJson(finalUserOp)
+                
+                println("finalUnsignedUserOp: $finalUnsignedUserOp")
+                
+                sendTransaction.invoke(
+                    proxy,
+                    session,
+                    finalUnsignedUserOp,
+                    chainId,
+                    receiver
+                )
+            } catch (e: Exception) {
+                e.printStackTrace()
+                continuation.resume("Error: ${e.message}")
+            }
+        }
+    }
+
+    /**
      * Send a batch transaction using the UserOperation model
      * @param txParamsList List of transactions to execute
      * @param callGas Gas limit for the call
@@ -466,7 +547,7 @@ class WalletSDK(
             addProperty("maxFeePerGas", "0x" + userOp.maxFeePerGas.toString(16))
             addProperty("maxPriorityFeePerGas", "0x" + userOp.maxPriorityFeePerGas.toString(16))
             addProperty("paymasterAndData", if (userOp.paymasterAndData.isEmpty()) "0x" else userOp.paymasterAndData)
-            addProperty("signature", userOp.signature)
+            addProperty("signature", "0x0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000004000000000000000000000000000000000000000000000000000000000000001c0000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000000c0000000000000000000000000000000000000000000000000000000000000012000000000000000000000000000000000000000000000000000000000000000170000000000000000000000000000000000000000000000000000000000000001ff91ca92ce6ba4c0ba8762726099fb59224a87d7c7a2adcc70e055de889ff907013bd74a63a2cb33a1a912571367fdd312892f2066fec5343b5cf5eb4e533a1f00000000000000000000000000000000000000000000000000000000000000210000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000517b2274797065223a22776562617574686e2e676574222c226368616c6c656e6765223a2255476545487566783971466234332d76765059374c784c62584f334a686832396d4c5478717665575a4f38227d000000000000000000000000000000")
         }
 
         // Create the params array
@@ -501,8 +582,8 @@ class WalletSDK(
                 val error = jsonResponse.getAsJsonObject("error")
                 return@withContext GasEstimation(
                     preVerificationGas = BigInteger("100000"),
-                    verificationGasLimit = BigInteger("500000"),
-                    callGasLimit = BigInteger("500000")
+                    verificationGasLimit = BigInteger("800000"),
+                    callGasLimit = BigInteger("800000")
                 )
             }
 
@@ -510,7 +591,7 @@ class WalletSDK(
 
             return@withContext GasEstimation(
                 preVerificationGas = BigInteger(result.get("preVerificationGas").asString.substring(2), 16),
-                verificationGasLimit = BigInteger(result.get("verificationGasLimit").asString.substring(2), 16),
+                verificationGasLimit = BigInteger("800000"),
                 callGasLimit = BigInteger(result.get("callGasLimit").asString.substring(2), 16)
             )
         }
