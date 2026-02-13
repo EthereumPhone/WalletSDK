@@ -26,6 +26,10 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.ethereumphone.walletsdk.model.NoSysWalletException
+import org.ethereumphone.walletsdk.model.OwnedToken
+import org.ethereumphone.walletsdk.model.SwapQuote
+import org.ethereumphone.walletsdk.model.TokenBalance
+import org.ethereumphone.walletsdk.model.TokenMetadata
 import org.json.JSONObject
 import org.web3j.abi.FunctionEncoder
 import org.web3j.abi.TypeReference
@@ -78,6 +82,8 @@ class WalletSDK(
     private var proxy: Any? = null
     private lateinit var session: String
     private var bundlerRPC = bundlerRPCUrl
+
+    private val wmClient by lazy { WalletManagerClient(context) }
 
     init {
         proxy = initializeProxyService()
@@ -469,8 +475,8 @@ class WalletSDK(
                     initCode = initCode,
                     callData = callData,
                     callGasLimit = callGas ?: gasEstimation.callGasLimit,
-                    verificationGasLimit = gasEstimation.verificationGasLimit.multiply(BigInteger("2")),
-                    preVerificationGas = gasEstimation.preVerificationGas.multiply(BigInteger("2")),
+                    verificationGasLimit = gasEstimation.verificationGasLimit,
+                    preVerificationGas = gasEstimation.preVerificationGas,
                     maxFeePerGas = gasPrices.maxFeePerGas,
                     maxPriorityFeePerGas = gasPrices.maxPriorityFeePerGas,
                     paymasterAndData = "",
@@ -530,72 +536,93 @@ class WalletSDK(
     }
 
     /**
-     * Estimate gas for a user operation using the bundler RPC
+     * Estimate gas for a user operation using the bundler RPC.
+     *
+     * Uses the bundler's `eth_estimateUserOperationGas` endpoint to get
+     * `preVerificationGas` and `callGasLimit`.  `verificationGasLimit` is
+     * fixed at 800 000 because the bundler estimate is often too low for
+     * passkey-based wallets.
+     *
+     * A 2× safety buffer is applied to `preVerificationGas`; `callGasLimit`
+     * is used as-is from the bundler response.
+     *
+     * Returns sensible fallback values if the RPC call fails.
      */
     suspend fun estimateUserOperationGas(userOp: UserOperation): GasEstimation = withContext(Dispatchers.IO) {
         val client = OkHttpClient()
 
-        // Create the UserOperation JSON object
         val userOpJson = JsonObject().apply {
             addProperty("sender", userOp.sender)
             addProperty("nonce", "0x" + userOp.nonce.toString(16))
-            addProperty("initCode", if (userOp.initCode.isEmpty()) "0x" else userOp.initCode)
-            addProperty("callData", if (userOp.callData.isEmpty()) "0x" else userOp.callData)
+            addProperty("initCode", userOp.initCode.ifEmpty { "0x" })
+            addProperty("callData", userOp.callData.ifEmpty { "0x" })
             addProperty("callGasLimit", "0x" + userOp.callGasLimit.toString(16))
             addProperty("verificationGasLimit", "0x" + userOp.verificationGasLimit.toString(16))
             addProperty("preVerificationGas", "0x" + userOp.preVerificationGas.toString(16))
             addProperty("maxFeePerGas", "0x" + userOp.maxFeePerGas.toString(16))
             addProperty("maxPriorityFeePerGas", "0x" + userOp.maxPriorityFeePerGas.toString(16))
-            addProperty("paymasterAndData", if (userOp.paymasterAndData.isEmpty()) "0x" else userOp.paymasterAndData)
-            addProperty("signature", "0x0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000004000000000000000000000000000000000000000000000000000000000000001c0000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000000c0000000000000000000000000000000000000000000000000000000000000012000000000000000000000000000000000000000000000000000000000000000170000000000000000000000000000000000000000000000000000000000000001ff91ca92ce6ba4c0ba8762726099fb59224a87d7c7a2adcc70e055de889ff907013bd74a63a2cb33a1a912571367fdd312892f2066fec5343b5cf5eb4e533a1f00000000000000000000000000000000000000000000000000000000000000210000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000517b2274797065223a22776562617574686e2e676574222c226368616c6c656e6765223a2255476545487566783971466234332d76765059374c784c62584f334a686832396d4c5478717665575a4f38227d000000000000000000000000000000")
+            addProperty("paymasterAndData", userOp.paymasterAndData.ifEmpty { "0x" })
+            addProperty("signature", userOp.signature)
         }
 
-        // Create the params array
-        val paramsArray = JsonArray().apply {
-            add(userOpJson)
-            add(entryPointAddress) // EntryPoint contract address
-        }
-
-        // Create the complete RPC request
         val rpcRequest = JsonObject().apply {
             addProperty("jsonrpc", "2.0")
             addProperty("method", "eth_estimateUserOperationGas")
-            add("params", paramsArray)
+            add("params", JsonArray().apply {
+                add(userOpJson)
+                add(entryPointAddress)
+            })
             addProperty("id", 1)
         }
 
-        // Create and execute the HTTP request
         val request = Request.Builder()
             .url(bundlerRPC)
             .post(rpcRequest.toString().toRequestBody("application/json".toMediaType()))
             .build()
 
-        client.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) {
-                throw Exception("Failed to estimate UserOperation gas: ${response.body?.string()}")
+        var preVerificationGas = DEFAULT_PRE_VERIFICATION_GAS
+        var callGasLimit = DEFAULT_CALL_GAS_LIMIT
+
+        try {
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) return@withContext defaultGasEstimation()
+
+                val responseBody = response.body?.string()
+                if (responseBody.isNullOrEmpty()) return@withContext defaultGasEstimation()
+
+                val jsonResponse = Gson().fromJson(responseBody, JsonObject::class.java)
+
+                if (jsonResponse.has("error") || !jsonResponse.has("result")) {
+                    return@withContext defaultGasEstimation()
+                }
+
+                val result = jsonResponse.getAsJsonObject("result")
+
+                result.get("preVerificationGas")?.asString?.let {
+                    try { preVerificationGas = BigInteger(it.removePrefix("0x"), 16) }
+                    catch (_: Exception) { /* keep default */ }
+                }
+                result.get("callGasLimit")?.asString?.let {
+                    try { callGasLimit = BigInteger(it.removePrefix("0x"), 16) }
+                    catch (_: Exception) { /* keep default */ }
+                }
             }
-
-            val responseBody = response.body?.string() ?: throw Exception("Empty response from bundler")
-            val jsonResponse = Gson().fromJson(responseBody, JsonObject::class.java)
-
-            if (jsonResponse.has("error")) {
-                val error = jsonResponse.getAsJsonObject("error")
-                return@withContext GasEstimation(
-                    preVerificationGas = BigInteger("100000"),
-                    verificationGasLimit = BigInteger("800000"),
-                    callGasLimit = BigInteger("800000")
-                )
-            }
-
-            val result = jsonResponse.getAsJsonObject("result")
-
-            return@withContext GasEstimation(
-                preVerificationGas = BigInteger(result.get("preVerificationGas").asString.substring(2), 16),
-                verificationGasLimit = BigInteger("800000"),
-                callGasLimit = BigInteger(result.get("callGasLimit").asString.substring(2), 16)
-            )
+        } catch (_: Exception) {
+            return@withContext defaultGasEstimation()
         }
+
+        GasEstimation(
+            preVerificationGas = preVerificationGas.multiply(BigInteger.TWO),
+            verificationGasLimit = FIXED_VERIFICATION_GAS_LIMIT,
+            callGasLimit = callGasLimit
+        )
     }
+
+    private fun defaultGasEstimation() = GasEstimation(
+        preVerificationGas = DEFAULT_PRE_VERIFICATION_GAS.multiply(BigInteger.TWO),
+        verificationGasLimit = FIXED_VERIFICATION_GAS_LIMIT,
+        callGasLimit = DEFAULT_CALL_GAS_LIMIT
+    )
 
     private suspend fun getInitCode(): String = suspendCancellableCoroutine { continuation ->
         initCodeFromOS?.let {
@@ -824,10 +851,84 @@ class WalletSDK(
         return proxy != null
     }
 
+    // ──────────────────────────────────────────────
+    //  WalletManager – Token Balances
+    // ──────────────────────────────────────────────
+
+    /** Get the raw balance of a single token on a specific chain. */
+    fun getTokenBalance(chainId: Int, contractAddress: String): TokenBalance? =
+        wmClient.getTokenBalance(chainId, contractAddress)
+
+    /** Get every token balance WalletManager knows about on [chainId]. */
+    fun getTokenBalancesByChain(chainId: Int): List<TokenBalance> =
+        wmClient.getTokenBalancesByChain(chainId)
+
+    /** Get all token balances that are greater than zero, across all chains. */
+    fun getPositiveBalances(): List<TokenBalance> =
+        wmClient.getPositiveBalances()
+
+    // ──────────────────────────────────────────────
+    //  WalletManager – Token Metadata
+    // ──────────────────────────────────────────────
+
+    /** Get metadata (name, symbol, decimals, price, logo) for a single token. */
+    fun getTokenMetadata(chainId: Int, contractAddress: String): TokenMetadata? =
+        wmClient.getTokenMetadata(chainId, contractAddress)
+
+    /** Get metadata for every token WalletManager knows about on [chainId]. */
+    fun getTokenMetadataByChain(chainId: Int): List<TokenMetadata> =
+        wmClient.getTokenMetadataByChain(chainId)
+
+    // ──────────────────────────────────────────────
+    //  WalletManager – Owned Tokens (combined view)
+    // ──────────────────────────────────────────────
+
+    /** Get a single owned token by chain and contract address (balance must be > 0). */
+    fun getOwnedToken(chainId: Int, contractAddress: String): OwnedToken? =
+        wmClient.getOwnedToken(chainId, contractAddress)
+
+    /** Get all owned tokens on a specific chain (balance > 0). */
+    fun getOwnedTokensByChain(chainId: Int): List<OwnedToken> =
+        wmClient.getOwnedTokensByChain(chainId)
+
+    /** Get every token the user owns across all chains, with display-ready balances and prices. */
+    fun getAllOwnedTokens(): List<OwnedToken> =
+        wmClient.getAllOwnedTokens()
+
+    // ──────────────────────────────────────────────
+    //  WalletManager – Swap Quotes
+    // ──────────────────────────────────────────────
+
+    /**
+     * Request a DEX swap quote from WalletManager (backed by 0x API).
+     * Amounts are human-readable (e.g. `"100"` = 100 USDC, not `100000000`).
+     */
+    fun getSwapQuote(
+        sellToken: String,
+        buyToken: String,
+        sellAmount: String,
+        chainId: Int,
+        sellDecimals: Int,
+        buyDecimals: Int,
+        sellSymbol: String = "",
+        buySymbol: String = ""
+    ): SwapQuote? = wmClient.getSwapQuote(
+        sellToken, buyToken, sellAmount, chainId,
+        sellDecimals, buyDecimals, sellSymbol, buySymbol
+    )
+
+    /** Returns `true` if WalletManager's content providers are reachable. */
+    fun isWalletManagerAvailable(): Boolean = wmClient.isAvailable()
+
     companion object {
         const val SYS_SERVICE_CLASS = "android.os.WalletProxy"
         const val SYS_SERVICE = "wallet"
         const val DECLINE = "decline"
+
+        // Gas estimation defaults (used when the bundler RPC fails)
+        private val DEFAULT_PRE_VERIFICATION_GAS = BigInteger.valueOf(70_000)
+        private val DEFAULT_CALL_GAS_LIMIT = BigInteger.valueOf(200_000)
+        private val FIXED_VERIFICATION_GAS_LIMIT = BigInteger.valueOf(800_000)
     }
 
     data class UserOperation(
