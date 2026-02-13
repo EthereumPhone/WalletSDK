@@ -36,7 +36,7 @@ Add dependencies in your app/module `build.gradle`:
 implementation 'org.web3j:core:4.9.4'
 
 // WalletSDK
-implementation 'com.github.EthereumPhone:WalletSDK:0.2.0'
+implementation 'com.github.EthereumPhone:WalletSDK:0.3.0'
 ```
 
 ### Configure bundler RPC URL
